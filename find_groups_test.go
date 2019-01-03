@@ -5,14 +5,11 @@ import (
     "time"
     "fmt"
     "path"
-    "os"
     "reflect"
 
     "github.com/dsoprea/go-geographic-index"
     "github.com/dsoprea/go-logging"
     "github.com/dsoprea/go-time-index"
-    "github.com/dsoprea/go-geographic-attractor/index"
-    "github.com/dsoprea/go-geographic-attractor/parse"
 )
 
 const (
@@ -379,44 +376,6 @@ func getTestImageIndex(models map[string]string) (imageIndex *geoindex.Index) {
     return imageIndex
 }
 
-func getCityIndex(cityDataFilepath string) *geoattractorindex.CityIndex {
-    defer func() {
-        if state := recover(); state != nil {
-            err := log.Wrap(state.(error))
-            log.PrintError(err)
-            panic(err)
-        }
-    }()
-
-    // Load countries.
-
-    countryDataFilepath := path.Join(testAssetsPath, "countryInfo.txt")
-
-    f, err := os.Open(countryDataFilepath)
-    log.PanicIf(err)
-
-    defer f.Close()
-
-    countries, err := geoattractorparse.BuildGeonamesCountryMapping(f)
-    log.PanicIf(err)
-
-    // Load cities.
-
-    gp := geoattractorparse.NewGeonamesParser(countries)
-
-    g, err := os.Open(cityDataFilepath)
-    log.PanicIf(err)
-
-    defer g.Close()
-
-    ci := geoattractorindex.NewCityIndex()
-
-    err = ci.Load(gp, g)
-    log.PanicIf(err)
-
-    return ci
-}
-
 func checkGroup(fg *FindGroups, finishedGroupKey GroupKey, finishedGroup []geoindex.GeographicRecord, expectedTimeKey time.Time, expectedCountry, expectedCity string, expectedFilenames []string) {
     if finishedGroupKey.TimeKey != expectedTimeKey {
         log.Panicf("Time-key not correct: [%s] != [%s]\n", finishedGroupKey.TimeKey, expectedTimeKey)
@@ -465,8 +424,9 @@ func TestFindGroups_FindNext_ImagesWithLocations_SameModel(t *testing.T) {
 
     imageIndex := getTestImageIndex(nil)
 
-    cityDataFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
-    ci := getCityIndex(cityDataFilepath)
+    citiesFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
+    countriesFilepath := path.Join(testAssetsPath, "countryInfo.txt")
+    ci := CityIndex(countriesFilepath, citiesFilepath)
 
     fg := NewFindGroups(locationIndex, imageIndex, ci)
 
@@ -607,8 +567,9 @@ func TestFindGroups_FindNext_ImagesWithLocations_DifferentModels_AlignedWithTime
 
     imageIndex := getTestImageIndex(models)
 
-    cityDataFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
-    ci := getCityIndex(cityDataFilepath)
+    citiesFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
+    countriesFilepath := path.Join(testAssetsPath, "countryInfo.txt")
+    ci := CityIndex(countriesFilepath, citiesFilepath)
 
     fg := NewFindGroups(locationIndex, imageIndex, ci)
 
@@ -751,8 +712,9 @@ func TestFindGroups_FindNext_ImagesWithLocations_DifferentModels_NotAlignedWithT
 
     imageIndex := getTestImageIndex(models)
 
-    cityDataFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
-    ci := getCityIndex(cityDataFilepath)
+    citiesFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
+    countriesFilepath := path.Join(testAssetsPath, "countryInfo.txt")
+    ci := CityIndex(countriesFilepath, citiesFilepath)
 
     fg := NewFindGroups(locationIndex, imageIndex, ci)
 
@@ -934,8 +896,9 @@ func TestFindGroups_FindNext_ImagesWithoutLocations(t *testing.T) {
     imageIndex.Add(geoindex.SourceImageJpeg, "image9.jpg", epochUtc.Add(oneDay * 1 + time.Hour * 1 + time.Minute * 11), false, 0, 0, im)
     imageIndex.Add(geoindex.SourceImageJpeg, "image10.jpg", epochUtc.Add(oneDay * 3 + time.Hour * 0 + time.Minute * 11), false, 0, 0, im)
 
-    cityDataFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
-    ci := getCityIndex(cityDataFilepath)
+    citiesFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
+    countriesFilepath := path.Join(testAssetsPath, "countryInfo.txt")
+    ci := CityIndex(countriesFilepath, citiesFilepath)
 
     fg := NewFindGroups(locationIndex, imageIndex, ci)
 
@@ -1067,33 +1030,9 @@ func getExampleImageIndex() *geoindex.Index {
 }
 
 func ExampleFindGroups_FindNext() {
-    // Load countries.
-
-    countryDataFilepath := path.Join(testAssetsPath, "countryInfo.txt")
-
-    f, err := os.Open(countryDataFilepath)
-    log.PanicIf(err)
-
-    defer f.Close()
-
-    countries, err := geoattractorparse.BuildGeonamesCountryMapping(f)
-    log.PanicIf(err)
-
-    // Load cities.
-
-    gp := geoattractorparse.NewGeonamesParser(countries)
-
-    cityDataFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
-
-    g, err := os.Open(cityDataFilepath)
-    log.PanicIf(err)
-
-    defer g.Close()
-
-    cityIndex := geoattractorindex.NewCityIndex()
-
-    err = cityIndex.Load(gp, g)
-    log.PanicIf(err)
+    citiesFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
+    countriesFilepath := path.Join(testAssetsPath, "countryInfo.txt")
+    cityIndex := CityIndex(countriesFilepath, citiesFilepath)
 
     // We use a couple of fake indices for the purpose of the example.
     locationIndex := getExampleLocationIndex()
