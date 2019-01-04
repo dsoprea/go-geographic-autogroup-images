@@ -1,0 +1,102 @@
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark>
+      <name>Coral Springs, FL</name>
+      <description>47 pictures</description>
+      <Point>
+        <coordinates>-80.2706,26.27119</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Sheepshead Bay, NY</name>
+      <description>2 groups&lt;br /&gt;72 pictures</description>
+      <Point>
+        <coordinates>-73.94458,40.59122</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Hyannis, MA</name>
+      <description>2 groups&lt;br /&gt;46 pictures</description>
+      <Point>
+        <coordinates>-70.2828,41.65289</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Niantic, CT</name>
+      <description>80 pictures</description>
+      <Point>
+        <coordinates>-72.19313,41.32538</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Madaket, MA</name>
+      <description>2 groups&lt;br /&gt;1257 pictures</description>
+      <Point>
+        <coordinates>-70.19807,41.2729</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Windsor</name>
+      <description>21 pictures</description>
+      <Point>
+        <coordinates>-83.01654,42.30008</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>North York</name>
+      <description>2 groups&lt;br /&gt;151 pictures</description>
+      <Point>
+        <coordinates>-79.4163,43.76681</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Cumminsville, NY</name>
+      <description>385 pictures</description>
+      <Point>
+        <coordinates>-77.71972,42.57146</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Guelph</name>
+      <description>70 pictures</description>
+      <Point>
+        <coordinates>-80.25599,43.54594</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>St. Catharines</name>
+      <description>74 pictures</description>
+      <Point>
+        <coordinates>-79.24267,43.17126</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>New York City, NY</name>
+      <description>2 groups&lt;br /&gt;71 pictures</description>
+      <Point>
+        <coordinates>-74.00597,40.71427</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Warren, MI</name>
+      <description>2 groups&lt;br /&gt;884 pictures</description>
+      <Point>
+        <coordinates>-83.01304,42.49044</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Yonkers, NY</name>
+      <description>3 groups&lt;br /&gt;378 pictures</description>
+      <Point>
+        <coordinates>-73.89875,40.93121</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Bushwick, NY</name>
+      <description>25 pictures</description>
+      <Point>
+        <coordinates>-73.91875,40.69427</coordinates>
+      </Point>
+    </Placemark>
+  </Document>
+</kml>
