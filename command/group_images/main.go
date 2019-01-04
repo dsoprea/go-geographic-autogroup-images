@@ -200,28 +200,32 @@ func handleGroup(groupArguments groupParameters) {
         err := writeCopyPathInfo(groupArguments.CopyPath, destPaths)
         log.PanicIf(err)
 
-        tallies := make(Tallies, len(destPaths))
-        i := 0
+        tallies := make(Tallies, 0)
         for destPath, count := range destPaths {
+            if count < 50 {
+                continue
+            }
+
             destRelPath := destPath[len(groupArguments.CopyPath)+1:]
 
-            tallies[i] = tallyItem{
+            ti := tallyItem{
                 name:  destRelPath,
                 count: count,
             }
 
-            i++
+            tallies = append(tallies, ti)
         }
 
-        // This sorts in reverse.
-        sort.Sort(tallies)
+        if len(tallies) > 0 {
+            // This sorts in reverse.
+            sort.Sort(tallies)
 
-        for _, ti := range tallies {
-            if ti.count < 50 {
-                break
+            fmt.Printf("Largest Groups\n")
+            fmt.Printf("==============\n")
+
+            for _, ti := range tallies {
+                fmt.Printf("%s: (%d)\n", ti.name, ti.count)
             }
-
-            fmt.Printf("%s: (%d)\n", ti.name, ti.count)
         }
 
         // TODO(dustin): !! Use an existing tool to generate linked HTML indices for browsing.
