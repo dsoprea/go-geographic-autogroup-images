@@ -5,15 +5,15 @@ import (
     "fmt"
     "time"
 
+    "github.com/dsoprea/go-geographic-attractor"
+    "github.com/dsoprea/go-geographic-attractor/index"
+    "github.com/dsoprea/go-geographic-index"
     "github.com/dsoprea/go-logging"
     "github.com/dsoprea/go-time-index"
-    "github.com/dsoprea/go-geographic-index"
-    "github.com/dsoprea/go-geographic-attractor/index"
-    "github.com/dsoprea/go-geographic-attractor"
 )
 
 var (
-    ErrNoMoreGroups = errors.New("no more groups")
+    ErrNoMoreGroups         = errors.New("no more groups")
     ErrNoNearLocationRecord = errors.New("no location record was near-enough")
 )
 
@@ -27,8 +27,8 @@ const (
     // image if all of the other factors match.
     DefaultCoalescenceWindowDuration = time.Hour * 24
 
-    // TimeKeyAlignment is a factor that determines how images should be grouped 
-    // together on the basis of their timestamps if their grouping factors are 
+    // TimeKeyAlignment is a factor that determines how images should be grouped
+    // together on the basis of their timestamps if their grouping factors are
     // otherwise identical.
     TimeKeyAlignment = 60 * 10
 )
@@ -48,9 +48,9 @@ type UnassignedRecord struct {
 }
 
 type GroupKey struct {
-    TimeKey         time.Time
-    NearestCityKey  string
-    CameraModel string
+    TimeKey        time.Time
+    NearestCityKey string
+    CameraModel    string
 }
 
 func (gk GroupKey) String() string {
@@ -63,7 +63,7 @@ func (gk GroupKey) String() string {
 type FindGroups struct {
     locationIndex        *geoindex.Index
     imageIndex           *geoindex.Index
-    unassignedRecords              []UnassignedRecord
+    unassignedRecords    []UnassignedRecord
     currentImagePosition int
     cityIndex            *geoattractorindex.CityIndex
     nearestCityIndex     map[string]geoattractor.CityRecord
@@ -121,13 +121,13 @@ func (fg *FindGroups) addUnassigned(gr geoindex.GeographicRecord, reason string)
     findGroupsLogger.Warningf(nil, "Skipping %s: %s", gr, reason)
 }
 
-// findLocationByTime returns the nearest location record to the timestamp in 
+// findLocationByTime returns the nearest location record to the timestamp in
 // the given image record.
 //
-// Note that we keep separate bins for separate camera models. This mitigates 
-// producing a bunch of fragmented groups if someone combined pictures from 
+// Note that we keep separate bins for separate camera models. This mitigates
+// producing a bunch of fragmented groups if someone combined pictures from
 // multiple people or multiple cameras.
-func (fg *FindGroups) findLocationByTime(imageTe timeindex.TimeEntry) (matchedTe timeindex.TimeEntry, err error) {
+func (fg *FindGroups) findLocationByTimeBestGuess(imageTe timeindex.TimeEntry) (matchedTe timeindex.TimeEntry, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -216,9 +216,9 @@ func (fg *FindGroups) findLocationByTime(imageTe timeindex.TimeEntry) (matchedTe
     return matchedTe, nil
 }
 
-// flushCurrentGroup will capture the current set of grouped images, truncate 
-// the list, set the next group key as the current group key, and return. Note 
-// that this only acts on the current group of the same camera-model as the next 
+// flushCurrentGroup will capture the current set of grouped images, truncate
+// the list, set the next group key as the current group key, and return. Note
+// that this only acts on the current group of the same camera-model as the next
 // group-key.
 func (fg *FindGroups) flushCurrentGroup(nextGroupKey GroupKey) (finishedGroupKey GroupKey, finishedGroup []geoindex.GeographicRecord, err error) {
     defer func() {
@@ -247,20 +247,20 @@ func (fg *FindGroups) flushCurrentGroup(nextGroupKey GroupKey) (finishedGroupKey
 // BIG FAT NOTE ON ORDERING
 // ==
 //
-// We internally enumerate the previously-loaded time-ordered images and store 
-// them into a hash, keyed by camera-model. The camera-model-based storage is 
-// there to prevent multiple sets of overlapping images from interfering with 
-// how we group images. As a result, when the camera-model changes from one 
+// We internally enumerate the previously-loaded time-ordered images and store
+// them into a hash, keyed by camera-model. The camera-model-based storage is
+// there to prevent multiple sets of overlapping images from interfering with
+// how we group images. As a result, when the camera-model changes from one
 // image to the next, the images previously grouped for a given model will stay
-// in the buffer until the very end until we've seen all images and begin to 
-// flush the buffered groups of images. *At this point*, which groups of 
-// buffered images will be returned first will depend on Go's hash algorithm. 
-// Whichever model is visited in the `currentGroup`/`currentGroupKey` hashes 
+// in the buffer until the very end until we've seen all images and begin to
+// flush the buffered groups of images. *At this point*, which groups of
+// buffered images will be returned first will depend on Go's hash algorithm.
+// Whichever model is visited in the `currentGroup`/`currentGroupKey` hashes
 // first on every call to this function will determine that.
 //
-// Note that the above ordering behavior only applies when only the model 
-// changes from one image to the next. If other grouping factors change but the 
-// model stays the same, the images already collected for that model will be 
+// Note that the above ordering behavior only applies when only the model
+// changes from one image to the next. If other grouping factors change but the
+// model stays the same, the images already collected for that model will be
 // returned immediately.
 func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geoindex.GeographicRecord, err error) {
     defer func() {
@@ -272,15 +272,15 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
     imageIndexTs := fg.imageIndex.Series()
 
     if fg.currentImagePosition >= len(imageIndexTs) {
-        // Do one iteration, at most, just to pop exactly one group out of 
+        // Do one iteration, at most, just to pop exactly one group out of
         // the buffer if we have anything.
         //
         // We use `fg.currentGroup` rather than `fg.currentGroupKey`, directly,
-        // because `flushCurrentGroup()` will always leave at least one item in 
+        // because `flushCurrentGroup()` will always leave at least one item in
         // `fg.currentGroupKey`.
         for cameraModel, _ := range fg.currentGroup {
             currentGroupKey := fg.currentGroupKey[cameraModel]
-            
+
             finishedGroupKey, finishedGroup, err = fg.flushCurrentGroup(currentGroupKey)
             log.PanicIf(err)
 
@@ -299,7 +299,8 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
         for _, item := range imageTe.Items {
             imageGr := item.(geoindex.GeographicRecord)
             if imageGr.HasGeographic == false {
-                matchedTe, err := fg.findLocationByTime(imageTe)
+                // TODO(dustin): !! Allow for multiple strategies. In the case of high-confidence data that may not record points if there has been no movement, we can also go with any points that either are equal to or less than the query.
+                matchedTe, err := fg.findLocationByTimeBestGuess(imageTe)
 
                 if err != nil {
                     if log.Is(err, ErrNoNearLocationRecord) == true {
@@ -353,9 +354,8 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
             // Determine what timestamp to associate this image to. The time-
             // key is the image's time rounded down to a ten-minute alignment.
 
-
             imageUnixTime := imageTe.Time.Unix()
-            normalImageUnixTime := imageUnixTime - imageUnixTime % TimeKeyAlignment
+            normalImageUnixTime := imageUnixTime - imageUnixTime%TimeKeyAlignment
 
             timeKey := time.Unix(normalImageUnixTime, 0).UTC()
 
@@ -379,7 +379,7 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
             if currentGroupKeyFound == false {
                 fg.currentGroupKey[cameraModel] = gk
 
-                fg.currentGroup[cameraModel] = []geoindex.GeographicRecord {
+                fg.currentGroup[cameraModel] = []geoindex.GeographicRecord{
                     imageGr,
                 }
             } else if gk != currentGroupKey {
@@ -389,7 +389,7 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
                 if existingGroup, found := fg.currentGroup[cameraModel]; found == true {
                     fg.currentGroup[cameraModel] = append(existingGroup, imageGr)
                 } else {
-                    fg.currentGroup[cameraModel] = []geoindex.GeographicRecord {
+                    fg.currentGroup[cameraModel] = []geoindex.GeographicRecord{
                         imageGr,
                     }
                 }
@@ -402,7 +402,7 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
                 if existingGroup, found := fg.currentGroup[cameraModel]; found == true {
                     fg.currentGroup[cameraModel] = append(existingGroup, imageGr)
                 } else {
-                    fg.currentGroup[cameraModel] = []geoindex.GeographicRecord {
+                    fg.currentGroup[cameraModel] = []geoindex.GeographicRecord{
                         imageGr,
                     }
                 }
@@ -410,11 +410,11 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
         }
     }
 
-    // Do one iteration, at most, just to pop exactly one group out of 
+    // Do one iteration, at most, just to pop exactly one group out of
     // the buffer if we have anything.
     //
-    // We use `fg.currentGroup` rather than `fg.currentGroupKey`, directly, 
-    // because `flushCurrentGroup()` will always leave at least one item in 
+    // We use `fg.currentGroup` rather than `fg.currentGroupKey`, directly,
+    // because `flushCurrentGroup()` will always leave at least one item in
     // `fg.currentGroupKey`.
     for cameraModel, _ := range fg.currentGroup {
         currentGroupKey := fg.currentGroupKey[cameraModel]
