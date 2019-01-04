@@ -9,6 +9,7 @@ import (
     "io/ioutil"
     "os"
     "path"
+    "sort"
     "text/template"
     "time"
 
@@ -27,6 +28,28 @@ var (
 const (
     copyInfoFilenamePrefix = ".autogroup"
 )
+
+type tallyItem struct {
+    name  string
+    count int
+}
+
+type Tallies []tallyItem
+
+// Len is the number of elements in the collection.
+func (tallies Tallies) Len() int {
+    return len(tallies)
+}
+
+// Less sorts in reverse so that a call to sort.Sort() will produce a
+// descendingly-ordered list.
+func (tallies Tallies) Less(i, j int) bool {
+    return tallies[i].count > tallies[j].count
+}
+
+func (tallies Tallies) Swap(i, j int) {
+    tallies[i], tallies[j] = tallies[j], tallies[i]
+}
 
 // attractorParameters are the parameters common to anything that needs to load
 // a `geoattractorindex.CityIndex`.
@@ -53,7 +76,8 @@ type groupParameters struct {
     UnassignedFilepath        string `long:"unassigned-filepath" description:"File to write unassigned files to"`
     PrintStats                bool   `long:"stats" description:"Print statistics"`
     CopyPath                  string `long:"copy-into-path" description:"Copy grouped images into this path."`
-    ImageOutputPathTemplate   string `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}} {{.city_and_province_state}}{{.path_sep}}{{.year}}-{{.month_number}}-{{.day_number}}{{.path_sep}}{{.camera_model}}"`
+    ImageOutputPathTemplate   string `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}} {{.location}}{{.path_sep}}{{.year}}-{{.month_number}}-{{.day_number}}{{.path_sep}}{{.camera_model}}"`
+    NoPrintDotOutput          bool   `long:"no-dots" description:"Don't print dot progress output if copying"`
 }
 
 type subcommands struct {
@@ -122,8 +146,9 @@ func handleGroup(groupArguments groupParameters) {
     imageOutputPathTemplate := template.Must(template.New("image output template").Parse(groupArguments.ImageOutputPathTemplate))
 
     // We use a map to ensure uniqueness.
-    destPaths := make(map[string]struct{})
+    destPaths := make(map[string]int)
 
+    printDotOutput := (groupArguments.NoPrintDotOutput == false)
     for i := 0; ; i++ {
         finishedGroupKey, finishedGroup, err := fg.FindNext()
         if err != nil {
@@ -144,10 +169,10 @@ func handleGroup(groupArguments groupParameters) {
         }
 
         if groupArguments.CopyPath != "" {
-            destPath, err := copyFile(fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate)
+            destPath, err := copyFile(fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate, printDotOutput)
             log.PanicIf(err)
 
-            destPaths[destPath] = struct{}{}
+            destPaths[destPath] = len(finishedGroup)
         }
 
         // TODO(dustin): Just to get rid of incidental pictures from the journey.
@@ -174,6 +199,31 @@ func handleGroup(groupArguments groupParameters) {
     if len(destPaths) > 0 {
         err := writeCopyPathInfo(groupArguments.CopyPath, destPaths)
         log.PanicIf(err)
+
+        tallies := make(Tallies, len(destPaths))
+        i := 0
+        for destPath, count := range destPaths {
+            destRelPath := destPath[len(groupArguments.CopyPath)+1:]
+
+            tallies[i] = tallyItem{
+                name:  destRelPath,
+                count: count,
+            }
+
+            i++
+        }
+
+        // This sorts in reverse.
+        sort.Sort(tallies)
+
+        for _, ti := range tallies {
+            if ti.count < 50 {
+                break
+            }
+
+            fmt.Printf("%s: (%d)\n", ti.name, ti.count)
+        }
+
         // TODO(dustin): !! Use an existing tool to generate linked HTML indices for browsing.
     }
 
@@ -202,7 +252,7 @@ func handleGroup(groupArguments groupParameters) {
     }
 }
 
-func copyFile(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template) (destPath string, err error) {
+func copyFile(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printDotOutput bool) (destPath string, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -214,15 +264,34 @@ func copyFile(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKe
     nearestCityIndex := fg.NearestCityIndex()
     cityRecord := nearestCityIndex[finishedGroupKey.NearestCityKey]
 
+    camera_model := finishedGroupKey.CameraModel
+
+    // This will often happen with screen-catpures and pictures downloaded
+    // from social networks.
+    if camera_model == "" {
+        camera_model = "no_camera_model"
+    }
+
+    cityprovince := cityRecord.CityAndProvinceState()
+
+    location := cityprovince
+
+    // If the city-record doesn't have a usable province-state string (where
+    // `city_and_province_state` equals city), then attach the country name.
+    if location == cityRecord.City {
+        location = fmt.Sprintf("%s, %s", cityRecord.City, cityRecord.Country)
+    }
+
     replacements := map[string]interface{}{
         "year":                    timeKey.Year(),
         "month_number":            fmt.Sprintf("%02d", timeKey.Month()),
         "month_name":              fmt.Sprintf("%s", timeKey.Month()),
         "day_number":              fmt.Sprintf("%02d", timeKey.Day()),
-        "city_and_province_state": cityRecord.CityAndProvinceState(),
+        "city_and_province_state": cityprovince,
+        "location":                location,
         "country":                 cityRecord.Country,
         "record_count":            len(finishedGroup),
-        "camera_model":            finishedGroupKey.CameraModel,
+        "camera_model":            camera_model,
         "path_sep":                string([]byte{os.PathSeparator}),
     }
 
@@ -261,7 +330,9 @@ func copyFile(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKe
             destFilepath = fmt.Sprintf("%s (%d)%s", leftSide, i+1, destExt)
         }
 
-        fmt.Printf("COPY: [%s] => [%s]\n", gr.Filepath, destFilepath)
+        if printDotOutput == true {
+            fmt.Printf(".")
+        }
 
         fromFile, err := os.Open(gr.Filepath)
         log.PanicIf(err)
@@ -274,6 +345,10 @@ func copyFile(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKe
 
         fromFile.Close()
         toFile.Close()
+    }
+
+    if printDotOutput == true {
+        fmt.Printf("\n")
     }
 
     return destPath, nil
@@ -307,7 +382,7 @@ func writeGroupInfoAsJson(fg *geoautogroup.FindGroups, collected []interface{}, 
     return nil
 }
 
-func writeCopyPathInfo(destRootPath string, destPaths map[string]struct{}) (err error) {
+func writeCopyPathInfo(destRootPath string, destPaths map[string]int) (err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
