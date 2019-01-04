@@ -1091,3 +1091,5 @@ func ExampleFindGroups_FindNext() {
     // (3): GeographicRecord<F=[file03.jpg] LAT=[41.850030] LON=[-87.650050] CELL=[9803822164217287575]>
     // (4): GeographicRecord<F=[file04.jpg] LAT=[41.850030] LON=[-87.650050] CELL=[9803822164217287575]>
 }
+
+// TODO(dustin): !! Add test for `findLocationByTimeWithSparseLocations`.

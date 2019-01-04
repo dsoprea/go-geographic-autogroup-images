@@ -18,10 +18,6 @@ var (
 )
 
 const (
-    // DefaultRoundingWindowDuration is the largest time duration we're allowed
-    // to search for matching location records within for a given image.
-    DefaultRoundingWindowDuration = time.Minute * 10
-
     // DefaultCoalescenceWindowDuration is the distance that we'll use to
     // determine if the current image might belong to the same group as the last
     // image if all of the other factors match.
@@ -38,6 +34,11 @@ const (
     SkipReasonNoNearCity           = "no near city"
 )
 
+const (
+    LocationMatchStrategyBestGuess  = "best guess"
+    LocationMatchStrategySparseData = "sparse data"
+)
+
 var (
     findGroupsLogger = log.NewLogger("geogroup.find_groups")
 )
@@ -48,9 +49,9 @@ type UnassignedRecord struct {
 }
 
 type GroupKey struct {
-    TimeKey        time.Time
-    NearestCityKey string
-    CameraModel    string
+    TimeKey        time.Time `json:"time_key"`
+    NearestCityKey string    `json:"nearest_city_key"`
+    CameraModel    string    `json:"camera_model"`
 }
 
 func (gk GroupKey) String() string {
@@ -70,31 +71,49 @@ type FindGroups struct {
     currentGroupKey      map[string]GroupKey
     currentGroup         map[string][]geoindex.GeographicRecord
 
-    roundingWindowDuration    time.Duration
+    // roundingWindowDuration    time.Duration
     coalescenceWindowDuration time.Duration
+
+    locationMatcherFn LocationMatcherFn
 }
+
+type LocationMatcherFn func(imageTe timeindex.TimeEntry) (matchedTe timeindex.TimeEntry, err error)
 
 func NewFindGroups(locationIndex *geoindex.Index, imageIndex *geoindex.Index, ci *geoattractorindex.CityIndex) *FindGroups {
     if len(locationIndex.Series()) == 0 {
         log.Panicf("no locations in index")
     }
 
-    return &FindGroups{
-        locationIndex:             locationIndex,
-        imageIndex:                imageIndex,
-        unassignedRecords:         make([]UnassignedRecord, 0),
-        cityIndex:                 ci,
-        nearestCityIndex:          make(map[string]geoattractor.CityRecord),
-        currentGroupKey:           make(map[string]GroupKey),
-        currentGroup:              make(map[string][]geoindex.GeographicRecord, 0),
-        roundingWindowDuration:    DefaultRoundingWindowDuration,
+    fg := &FindGroups{
+        locationIndex:     locationIndex,
+        imageIndex:        imageIndex,
+        unassignedRecords: make([]UnassignedRecord, 0),
+        cityIndex:         ci,
+        nearestCityIndex:  make(map[string]geoattractor.CityRecord),
+        currentGroupKey:   make(map[string]GroupKey),
+        currentGroup:      make(map[string][]geoindex.GeographicRecord, 0),
+        // roundingWindowDuration:    DefaultRoundingWindowDuration,
         coalescenceWindowDuration: DefaultCoalescenceWindowDuration,
+    }
+
+    fg.locationMatcherFn = fg.findLocationByTimeBestGuess
+
+    return fg
+}
+
+func (fg *FindGroups) SetLocationMatchStrategy(strategy string) {
+    if strategy == LocationMatchStrategySparseData {
+        fg.locationMatcherFn = fg.findLocationByTimeWithSparseLocations
+    } else if strategy == LocationMatchStrategyBestGuess {
+        fg.locationMatcherFn = fg.findLocationByTimeBestGuess
+    } else {
+        log.Panicf("location-match strategy [%s] not valid", strategy)
     }
 }
 
-func (fg *FindGroups) SetRoundingWindowDuration(roundingWindowDuration time.Duration) {
-    fg.roundingWindowDuration = roundingWindowDuration
-}
+// func (fg *FindGroups) SetRoundingWindowDuration(roundingWindowDuration time.Duration) {
+//     fg.roundingWindowDuration = roundingWindowDuration
+// }
 
 func (fg *FindGroups) SetCoalescenceWindowDuration(coalescenceWindowDuration time.Duration) {
     fg.coalescenceWindowDuration = coalescenceWindowDuration
@@ -133,6 +152,10 @@ func (fg *FindGroups) findLocationByTimeBestGuess(imageTe timeindex.TimeEntry) (
             err = log.Wrap(state.(error))
         }
     }()
+
+    // DefaultRoundingWindowDuration is the largest time duration we're allowed
+    // to search for matching location records within for a given image.
+    roundingWindowDuration := time.Minute * 10
 
     locationIndexTs := fg.locationIndex.Series()
 
@@ -190,10 +213,10 @@ func (fg *FindGroups) findLocationByTimeBestGuess(imageTe timeindex.TimeEntry) (
     }
 
     if durationSincePrevious != 0 {
-        if durationSincePrevious <= fg.roundingWindowDuration && (durationUntilNext == 0 || durationUntilNext > fg.roundingWindowDuration) {
+        if durationSincePrevious <= roundingWindowDuration && (durationUntilNext == 0 || durationUntilNext > roundingWindowDuration) {
             // Only the preceding time duration is acceptable.
             matchedTe = previousLocationTe
-        } else if durationSincePrevious <= fg.roundingWindowDuration && durationUntilNext != 0 && durationUntilNext <= fg.roundingWindowDuration {
+        } else if durationSincePrevious <= roundingWindowDuration && durationUntilNext != 0 && durationUntilNext <= roundingWindowDuration {
             // They're both fine. Take the nearest.
 
             if durationSincePrevious < durationUntilNext {
@@ -205,7 +228,7 @@ func (fg *FindGroups) findLocationByTimeBestGuess(imageTe timeindex.TimeEntry) (
     }
 
     // Effectively, the "else" for the above.
-    if durationUntilNext != 0 && matchedTe.IsZero() == true && durationUntilNext < fg.roundingWindowDuration {
+    if durationUntilNext != 0 && matchedTe.IsZero() == true && durationUntilNext < roundingWindowDuration {
         matchedTe = nextLocationTe
     }
 
@@ -214,6 +237,78 @@ func (fg *FindGroups) findLocationByTimeBestGuess(imageTe timeindex.TimeEntry) (
     }
 
     return matchedTe, nil
+}
+
+// findLocationByTimeWithSparseLocations uses the last location recorded within
+// the last twelve hours. This is for use with high-confidence datasets that are
+// recording continuously unless the subject/device has remained stationary
+// (which would minimize duplicate points).
+func (fg *FindGroups) findLocationByTimeWithSparseLocations(imageTe timeindex.TimeEntry) (matchedTe timeindex.TimeEntry, err error) {
+    defer func() {
+        if state := recover(); state != nil {
+            err = log.Wrap(state.(error))
+        }
+    }()
+
+    locationIndexTs := fg.locationIndex.Series()
+
+    // nearestLocationPosition is either the position where the exact
+    // time of the image was found in the location index or the
+    // position that it would be inserted (even though we're not
+    // interested in insertions).
+    //
+    // Both the location and image indices are ordered, obviously;
+    // technically we could potentially read along both and avoid a
+    // bunch of bunch searches. However, the location index will be
+    // frequented by large gaps that have no corresponding images and
+    // we're just going to end-up seeking more that way.
+    nearestLocationPosition := timeindex.SearchTimes(locationIndexTs, imageTe.Time)
+
+    maxProximityDuration := time.Hour * 12
+
+    if nearestLocationPosition >= len(locationIndexTs) {
+        // We were given a position past the end of the list.
+
+        lastTe := locationIndexTs[len(locationIndexTs)-1]
+        if imageTe.Time.Sub(lastTe.Time) <= maxProximityDuration {
+            // The last item in the list is still within proximity.
+
+            return lastTe, nil
+        }
+
+        // No match.
+        return timeindex.TimeEntry{}, ErrNoNearLocationRecord
+    }
+
+    // We were given a position within the list.
+
+    nearestLocationTe := locationIndexTs[nearestLocationPosition]
+    if nearestLocationTe.Time == imageTe.Time {
+        // We found a location record that exactly matched our
+        // image record (time-wise).
+
+        return nearestLocationTe, nil
+    }
+
+    // We found a location record with a time larger than our image's
+    // time.
+
+    if nearestLocationPosition > 0 {
+        // There was a record before this (with a timestamp that
+        // necessarily be lower) one so we'll take that instead.
+
+        matchedTe = locationIndexTs[nearestLocationPosition-1]
+        return matchedTe, nil
+    } else if nearestLocationTe.Time.Sub(imageTe.Time) <= maxProximityDuration {
+        // This is the first record we have (the image's timestamp must
+        // be earlier than the data we have). However, our image's
+        // timestamp still occurs within proximity.
+
+        return nearestLocationTe, nil
+    }
+
+    // No match.
+    return timeindex.TimeEntry{}, ErrNoNearLocationRecord
 }
 
 // flushCurrentGroup will capture the current set of grouped images, truncate
@@ -294,14 +389,15 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
         return GroupKey{}, nil, ErrNoMoreGroups
     }
 
+    // Loop through all timestamps starting from where we left off.
     for ; fg.currentImagePosition < len(imageIndexTs); fg.currentImagePosition++ {
         imageTe := imageIndexTs[fg.currentImagePosition]
         for _, item := range imageTe.Items {
+            // TODO(dustin): !! We'll skip images when we encounter a new group and return the existing one, if there are additional images on this timestamps. We should just set a flag and then terminate after we finish processing these items.
+
             imageGr := item.(geoindex.GeographicRecord)
             if imageGr.HasGeographic == false {
-                // TODO(dustin): !! Allow for multiple strategies. In the case of high-confidence data that may not record points if there has been no movement, we can also go with any points that either are equal to or less than the query.
-                matchedTe, err := fg.findLocationByTimeBestGuess(imageTe)
-
+                matchedTe, err := fg.locationMatcherFn(imageTe)
                 if err != nil {
                     if log.Is(err, ErrNoNearLocationRecord) == true {
                         fg.addUnassigned(imageGr, SkipReasonNoNearLocationRecord)
@@ -359,12 +455,28 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
 
             timeKey := time.Unix(normalImageUnixTime, 0).UTC()
 
-            // If the current image's time is within X duration of the last
-            // group's time-key, use the same time-key. If the last group's
-            // other factors also match, this group will end up being the same.
-            currentGroupKeyTimeKey := fg.currentGroupKey[cameraModel].TimeKey
-            if currentGroupKeyTimeKey.IsZero() == false && timeKey.Sub(currentGroupKeyTimeKey) < fg.coalescenceWindowDuration {
-                timeKey = currentGroupKeyTimeKey
+            currentGroupKey := fg.currentGroupKey[cameraModel]
+            currentGroupKeyTimeKey := currentGroupKey.TimeKey
+            if currentGroupKeyTimeKey.IsZero() == false {
+                // We're already tracking a group for this camera model.
+
+                // Check our sanity.
+                if currentGroupKey.CameraModel != cameraModel {
+                    log.Panicf("currently tracked camera-model does not equal current image camera-model where we are")
+                }
+
+                if currentGroupKey.NearestCityKey == nearestCityKey {
+                    // If the group we're currently tracking is the same city, reuse
+                    // the time-key. This means the group-key will match the current
+                    // one and prevents adjacent identical groups just due to the
+                    // time difference exceeding `fg.coalescenceWindowDuration`.
+
+                    timeKey = currentGroupKeyTimeKey
+                }
+
+                // Given the canges above, if the last group's other factors
+                // also match the factors we're going to assemble below, this
+                // group-key will end up being the same.
             }
 
             // Build the group key.
