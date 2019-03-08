@@ -3,10 +3,10 @@ package geoautogroup
 import (
     "os"
 
-    "github.com/dsoprea/go-logging"
-    "github.com/dsoprea/go-geographic-attractor/parse"
     "github.com/dsoprea/go-geographic-attractor/index"
+    "github.com/dsoprea/go-geographic-attractor/parse"
     "github.com/dsoprea/go-geographic-index"
+    "github.com/dsoprea/go-logging"
 )
 
 func GetCityIndex(countriesFilepath, citiesFilepath string) (ci *geoattractorindex.CityIndex, err error) {
@@ -44,7 +44,7 @@ func GetCityIndex(countriesFilepath, citiesFilepath string) (ci *geoattractorind
     return ci, nil
 }
 
-func GetGeographicIndex(paths []string) (index *geoindex.Index, err error) {
+func GetTimeIndex(paths []string) (ti *geoindex.TimeIndex, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -52,8 +52,8 @@ func GetGeographicIndex(paths []string) (index *geoindex.Index, err error) {
         }
     }()
 
-    index = geoindex.NewIndex()
-    gc := geoindex.NewGeographicCollector(index)
+    ti = geoindex.NewTimeIndex()
+    gc := geoindex.NewGeographicCollector(ti, nil)
 
     err = geoindex.RegisterImageFileProcessors(gc)
     log.PanicIf(err)
@@ -66,5 +66,5 @@ func GetGeographicIndex(paths []string) (index *geoindex.Index, err error) {
         log.PanicIf(err)
     }
 
-    return index, nil
+    return ti, nil
 }

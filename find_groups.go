@@ -18,14 +18,14 @@ var (
 )
 
 const (
-    // DefaultCoalescenceWindowDuration is the distance that we'll use to
-    // determine if the current image might belong to the same group as the last
-    // image if all of the other factors match.
-    DefaultCoalescenceWindowDuration = time.Hour * 24
+    // // DefaultCoalescenceWindowDuration is the distance that we'll use to
+    // // determine if the current image might belong to the same group as the last
+    // // image if all of the other factors match.
+    // DefaultCoalescenceWindowDuration = time.Hour * 24
 
     // TimeKeyAlignment is a factor that determines how images should be grouped
     // together on the basis of their timestamps if their grouping factors are
-    // otherwise identical.
+    // otherwise identical. In seconds.
     TimeKeyAlignment = 60 * 10
 )
 
@@ -44,7 +44,7 @@ var (
 )
 
 type UnassignedRecord struct {
-    Geographic geoindex.GeographicRecord
+    Geographic *geoindex.GeographicRecord
     Reason     string
 }
 
@@ -62,38 +62,38 @@ func (gk GroupKey) String() string {
 }
 
 type FindGroups struct {
-    locationIndex        *geoindex.Index
-    imageIndex           *geoindex.Index
+    locationTs           timeindex.TimeSlice
+    imageTs              timeindex.TimeSlice
     unassignedRecords    []UnassignedRecord
     currentImagePosition int
     cityIndex            *geoattractorindex.CityIndex
     nearestCityIndex     map[string]geoattractor.CityRecord
     currentGroupKey      map[string]GroupKey
-    currentGroup         map[string][]geoindex.GeographicRecord
+    currentGroup         map[string][]*geoindex.GeographicRecord
 
     // roundingWindowDuration    time.Duration
-    coalescenceWindowDuration time.Duration
+    // coalescenceWindowDuration time.Duration
 
     locationMatcherFn LocationMatcherFn
 }
 
 type LocationMatcherFn func(imageTe timeindex.TimeEntry) (matchedTe timeindex.TimeEntry, err error)
 
-func NewFindGroups(locationIndex *geoindex.Index, imageIndex *geoindex.Index, ci *geoattractorindex.CityIndex) *FindGroups {
-    if len(locationIndex.Series()) == 0 {
-        log.Panicf("no locations in index")
+func NewFindGroups(locationTs timeindex.TimeSlice, imageTs timeindex.TimeSlice, ci *geoattractorindex.CityIndex) *FindGroups {
+    if len(locationTs) == 0 {
+        log.Panicf("no locations")
     }
 
     fg := &FindGroups{
-        locationIndex:     locationIndex,
-        imageIndex:        imageIndex,
+        locationTs:        locationTs,
+        imageTs:           imageTs,
         unassignedRecords: make([]UnassignedRecord, 0),
         cityIndex:         ci,
         nearestCityIndex:  make(map[string]geoattractor.CityRecord),
         currentGroupKey:   make(map[string]GroupKey),
-        currentGroup:      make(map[string][]geoindex.GeographicRecord, 0),
+        currentGroup:      make(map[string][]*geoindex.GeographicRecord, 0),
         // roundingWindowDuration:    DefaultRoundingWindowDuration,
-        coalescenceWindowDuration: DefaultCoalescenceWindowDuration,
+        // coalescenceWindowDuration: DefaultCoalescenceWindowDuration,
     }
 
     fg.locationMatcherFn = fg.findLocationByTimeBestGuess
@@ -115,9 +115,9 @@ func (fg *FindGroups) SetLocationMatchStrategy(strategy string) {
 //     fg.roundingWindowDuration = roundingWindowDuration
 // }
 
-func (fg *FindGroups) SetCoalescenceWindowDuration(coalescenceWindowDuration time.Duration) {
-    fg.coalescenceWindowDuration = coalescenceWindowDuration
-}
+// func (fg *FindGroups) SetCoalescenceWindowDuration(coalescenceWindowDuration time.Duration) {
+//     fg.coalescenceWindowDuration = coalescenceWindowDuration
+// }
 
 // NearestCityIndex returns all of the cities that we've grouped the images by
 // in a map keyed the same as in the grouping.
@@ -129,7 +129,7 @@ func (fg *FindGroups) UnassignedRecords() []UnassignedRecord {
     return fg.unassignedRecords
 }
 
-func (fg *FindGroups) addUnassigned(gr geoindex.GeographicRecord, reason string) {
+func (fg *FindGroups) addUnassigned(gr *geoindex.GeographicRecord, reason string) {
     ur := UnassignedRecord{
         Geographic: gr,
         Reason:     reason,
@@ -157,7 +157,7 @@ func (fg *FindGroups) findLocationByTimeBestGuess(imageTe timeindex.TimeEntry) (
     // to search for matching location records within for a given image.
     roundingWindowDuration := time.Minute * 10
 
-    locationIndexTs := fg.locationIndex.Series()
+    locationIndexTs := fg.locationTs
 
     // nearestLocationPosition is either the position where the exact
     // time of the image was found in the location index or the
@@ -250,7 +250,7 @@ func (fg *FindGroups) findLocationByTimeWithSparseLocations(imageTe timeindex.Ti
         }
     }()
 
-    locationIndexTs := fg.locationIndex.Series()
+    locationIndexTs := fg.locationTs
 
     // nearestLocationPosition is either the position where the exact
     // time of the image was found in the location index or the
@@ -315,7 +315,7 @@ func (fg *FindGroups) findLocationByTimeWithSparseLocations(imageTe timeindex.Ti
 // the list, set the next group key as the current group key, and return. Note
 // that this only acts on the current group of the same camera-model as the next
 // group-key.
-func (fg *FindGroups) flushCurrentGroup(nextGroupKey GroupKey) (finishedGroupKey GroupKey, finishedGroup []geoindex.GeographicRecord, err error) {
+func (fg *FindGroups) flushCurrentGroup(nextGroupKey GroupKey) (finishedGroupKey GroupKey, finishedGroup []*geoindex.GeographicRecord, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -333,6 +333,18 @@ func (fg *FindGroups) flushCurrentGroup(nextGroupKey GroupKey) (finishedGroupKey
     fg.currentGroupKey[cameraModel] = nextGroupKey
 
     return finishedGroupKey, finishedGroup, nil
+}
+
+// getAlignedEpoch returns an aligned epoch time. Used to determine grouping.
+func getAlignedEpoch(epoch int64) int64 {
+    return epoch - epoch%TimeKeyAlignment
+}
+
+func getAlignedTime(t time.Time) time.Time {
+    epoch := t.Unix()
+    epoch = getAlignedEpoch(epoch)
+
+    return time.Unix(epoch, 0).UTC()
 }
 
 // FindNext returns the next set of grouped-images along with the actual
@@ -357,14 +369,14 @@ func (fg *FindGroups) flushCurrentGroup(nextGroupKey GroupKey) (finishedGroupKey
 // changes from one image to the next. If other grouping factors change but the
 // model stays the same, the images already collected for that model will be
 // returned immediately.
-func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geoindex.GeographicRecord, err error) {
+func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []*geoindex.GeographicRecord, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
         }
     }()
 
-    imageIndexTs := fg.imageIndex.Series()
+    imageIndexTs := fg.imageTs
 
     if fg.currentImagePosition >= len(imageIndexTs) {
         // Do one iteration, at most, just to pop exactly one group out of
@@ -395,7 +407,8 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
         for _, item := range imageTe.Items {
             // TODO(dustin): !! We'll skip images when we encounter a new group and return the existing one, if there are additional images on this timestamps. We should just set a flag and then terminate after we finish processing these items.
 
-            imageGr := item.(geoindex.GeographicRecord)
+            imageGr := item.(*geoindex.GeographicRecord)
+
             if imageGr.HasGeographic == false {
                 matchedTe, err := fg.locationMatcherFn(imageTe)
                 if err != nil {
@@ -408,7 +421,7 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
                 }
 
                 locationItem := matchedTe.Items[0]
-                locationGr := locationItem.(geoindex.GeographicRecord)
+                locationGr := locationItem.(*geoindex.GeographicRecord)
 
                 // The location index should exclusively be loaded with
                 // geographic data. This should never happen.
@@ -451,7 +464,7 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
             // key is the image's time rounded down to a ten-minute alignment.
 
             imageUnixTime := imageTe.Time.Unix()
-            normalImageUnixTime := imageUnixTime - imageUnixTime%TimeKeyAlignment
+            normalImageUnixTime := getAlignedEpoch(imageUnixTime)
 
             timeKey := time.Unix(normalImageUnixTime, 0).UTC()
 
@@ -466,10 +479,9 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
                 }
 
                 if currentGroupKey.NearestCityKey == nearestCityKey {
-                    // If the group we're currently tracking is the same city, reuse
-                    // the time-key. This means the group-key will match the current
-                    // one and prevents adjacent identical groups just due to the
-                    // time difference exceeding `fg.coalescenceWindowDuration`.
+                    // If the group we're currently tracking is the same city,
+                    // reuse the time-key. This means that adjacent groups will
+                    // always be merged if the only difference is time.
 
                     timeKey = currentGroupKeyTimeKey
                 }
@@ -491,30 +503,34 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
             if currentGroupKeyFound == false {
                 fg.currentGroupKey[cameraModel] = gk
 
-                fg.currentGroup[cameraModel] = []geoindex.GeographicRecord{
+                fg.currentGroup[cameraModel] = []*geoindex.GeographicRecord{
                     imageGr,
                 }
             } else if gk != currentGroupKey {
                 finishedGroupKey, finishedGroup, err = fg.flushCurrentGroup(gk)
                 log.PanicIf(err)
 
+                // The "current" group-key has been update but we still have to
+                // push our current image into the buffer.
+
                 if existingGroup, found := fg.currentGroup[cameraModel]; found == true {
                     fg.currentGroup[cameraModel] = append(existingGroup, imageGr)
                 } else {
-                    fg.currentGroup[cameraModel] = []geoindex.GeographicRecord{
+                    fg.currentGroup[cameraModel] = []*geoindex.GeographicRecord{
                         imageGr,
                     }
                 }
 
                 if finishedGroup != nil {
                     fg.currentImagePosition++
+
                     return finishedGroupKey, finishedGroup, nil
                 }
             } else {
                 if existingGroup, found := fg.currentGroup[cameraModel]; found == true {
                     fg.currentGroup[cameraModel] = append(existingGroup, imageGr)
                 } else {
-                    fg.currentGroup[cameraModel] = []geoindex.GeographicRecord{
+                    fg.currentGroup[cameraModel] = []*geoindex.GeographicRecord{
                         imageGr,
                     }
                 }
@@ -533,6 +549,8 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []geo
 
         finishedGroupKey, finishedGroup, err = fg.flushCurrentGroup(currentGroupKey)
         log.PanicIf(err)
+
+        // TODO(dustin): !! flushCurrentGroup() can return `nil` for `finishedGroup`. Do we need to check/assert that, here?
 
         return finishedGroupKey, finishedGroup, nil
     }

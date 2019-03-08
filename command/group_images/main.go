@@ -65,6 +65,11 @@ type indexParameters struct {
     ImagePaths []string `long:"image-path" description:"Path to scan for images to group (can be provided more than once)" required:"true"`
 }
 
+type sourceCatalogParameters struct {
+    SourceCatalogPath string `long:"source-catalog-path" description:"Write a catalog to the given path using the source images"`
+    NoEmbedImages     string `long:"no-embed-images" description:"By default thumbnails are embedded directly into the catalog. Use the source image directly, instead."`
+}
+
 type groupParameters struct {
     attractorParameters
     indexParameters
@@ -78,6 +83,8 @@ type groupParameters struct {
     CopyPath                  string `long:"copy-into-path" description:"Copy grouped images into this path."`
     ImageOutputPathTemplate   string `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}} {{.location}}{{.path_sep}}{{.year}}-{{.month_number}}-{{.day_number}}{{.path_sep}}{{.camera_model}}"`
     NoPrintDotOutput          bool   `long:"no-dots" description:"Don't print dot progress output if copying"`
+
+    sourceCatalogParameters
 }
 
 type subcommands struct {
@@ -103,21 +110,25 @@ func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups)
         fmt.Printf("Attractor index stats: %s\n", ci.Stats())
     }
 
-    locationIndex, err := geoautogroup.GetGeographicIndex(groupArguments.indexParameters.DataPaths)
+    locationIndex, err := geoautogroup.GetTimeIndex(groupArguments.indexParameters.DataPaths)
     log.PanicIf(err)
 
+    locationTs := locationIndex.Series()
+
     if groupArguments.PrintStats == true {
-        fmt.Printf("(%d) records loaded in location index.\n", len(locationIndex.Series()))
+        fmt.Printf("(%d) records loaded in location index.\n", len(locationTs))
     }
 
-    imageIndex, err := geoautogroup.GetGeographicIndex(groupArguments.indexParameters.ImagePaths)
+    imageIndex, err := geoautogroup.GetTimeIndex(groupArguments.indexParameters.ImagePaths)
     log.PanicIf(err)
 
+    imageTs := imageIndex.Series()
+
     if groupArguments.PrintStats == true {
-        fmt.Printf("(%d) records loaded in image index.\n", len(imageIndex.Series()))
+        fmt.Printf("(%d) records loaded in image index.\n", len(imageTs))
     }
 
-    fg = geoautogroup.NewFindGroups(locationIndex, imageIndex, ci)
+    fg = geoautogroup.NewFindGroups(locationTs, imageTs, ci)
 
     if groupArguments.LocationsAreSparse == true {
         fg.SetLocationMatchStrategy(geoautogroup.LocationMatchStrategySparseData)
@@ -134,14 +145,15 @@ func handleGroup(groupArguments groupParameters) {
         }
     }()
 
+    sessionTimestampPhraseBytes, err := time.Now().MarshalText()
+    log.PanicIf(err)
+
+    sessionTimestampPhrase := string(sessionTimestampPhraseBytes)
+
     fg := getFindGroups(groupArguments)
 
     kmlTallies := make(map[geoattractor.CityRecord][2]int)
-
-    var collected []interface{}
-    if groupArguments.JsonFilepath != "" {
-        collected = make([]interface{}, 0)
-    }
+    collected := make([]map[string]interface{}, 0)
 
     imageOutputPathTemplate := template.Must(template.New("image output template").Parse(groupArguments.ImageOutputPathTemplate))
 
@@ -196,8 +208,24 @@ func handleGroup(groupArguments groupParameters) {
         }
     }
 
+    // if collected != nil {
+    //     // Only write source catalog if we were given a path to write it to (we
+    //     // might be reading from multiple paths and we also do not want to
+    //     // change the input paths without permission).
+    //     if groupArguments.SourceCatalogPath != "" {
+    //         err := writeSourceHtmlCatalog(collected, groupArguments.SourceCatalogPath, groupArguments.NoEmbedImages)
+    //         log.PanicIf(err)
+    //     }
+
+    //     // Automatically write a destination catalog if we're doing a copy.
+    //     if groupArguments.CopyPath != "" {
+    //         err := writeDestHtmlCatalog(collected, sessionTimestampPhrase, groupArguments.CopyPath, groupArguments.NoEmbedImages)
+    //         log.PanicIf(err)
+    //     }
+    // }
+
     if len(destPaths) > 0 {
-        err := writeCopyPathInfo(groupArguments.CopyPath, destPaths)
+        err := writeCopyPathInfo(sessionTimestampPhrase, groupArguments.CopyPath, destPaths)
         log.PanicIf(err)
 
         tallies := make(Tallies, 0)
@@ -227,8 +255,6 @@ func handleGroup(groupArguments groupParameters) {
                 fmt.Printf("%s: (%d)\n", ti.name, ti.count)
             }
         }
-
-        // TODO(dustin): !! Use an existing tool to generate linked HTML indices for browsing.
     }
 
     // TODO(dustin): !! Make sure that files that returned nil,nil from the image processor in go-geographic-index is logged as unassigned. OTherwise, we'll have no chance of debugging image issues.
@@ -256,7 +282,7 @@ func handleGroup(groupArguments groupParameters) {
     }
 }
 
-func copyFile(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printDotOutput bool) (destPath string, err error) {
+func copyFile(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []*geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printDotOutput bool) (destPath string, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -358,7 +384,7 @@ func copyFile(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKe
     return destPath, nil
 }
 
-func writeGroupInfoAsJson(fg *geoautogroup.FindGroups, collected []interface{}, filepath string) (err error) {
+func writeGroupInfoAsJson(fg *geoautogroup.FindGroups, collected []map[string]interface{}, filepath string) (err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -386,7 +412,7 @@ func writeGroupInfoAsJson(fg *geoautogroup.FindGroups, collected []interface{}, 
     return nil
 }
 
-func writeCopyPathInfo(destRootPath string, destPaths map[string]int) (err error) {
+func writeCopyPathInfo(sessionTimestampPhrase, destRootPath string, destPaths map[string]int) (err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -403,10 +429,7 @@ func writeCopyPathInfo(destRootPath string, destPaths map[string]int) (err error
         destPathTallies[destRelPath] = len(entries)
     }
 
-    timestampPhraseBytes, err := time.Now().MarshalText()
-    log.PanicIf(err)
-
-    copyInfoFilename := fmt.Sprintf("%s-%s.json", copyInfoFilenamePrefix, string(timestampPhraseBytes))
+    copyInfoFilename := fmt.Sprintf("%s-%s.json", copyInfoFilenamePrefix, sessionTimestampPhrase)
     copyInfoFilepath := path.Join(destRootPath, copyInfoFilename)
 
     f, err := os.Create(copyInfoFilepath)
