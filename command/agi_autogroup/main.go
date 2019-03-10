@@ -286,7 +286,6 @@ func handleGroup(groupArguments groupParameters) {
         }
     }
 
-    fmt.Printf("KML-FILEPATH: [%s]\n", groupArguments.KmlFilepath)
     if groupArguments.KmlFilepath != "" {
         err := writeGroupInfoAsKml(kmlTallies, groupArguments.KmlFilepath)
         log.PanicIf(err)
