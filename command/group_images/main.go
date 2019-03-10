@@ -2,23 +2,28 @@ package main
 
 import (
     "bytes"
-    "encoding/json"
-    "encoding/xml"
     "fmt"
     "io"
-    "io/ioutil"
     "os"
     "path"
     "sort"
-    "text/template"
     "time"
+
+    "crypto/sha1"
+    "encoding/json"
+    "encoding/xml"
+    "io/ioutil"
+    "text/template"
+
+    "github.com/dsoprea/go-logging"
+    "github.com/jessevdk/go-flags"
+    "github.com/sbwhitecap/tqdm"
+    "github.com/sbwhitecap/tqdm/iterators"
+    "github.com/twpayne/go-kml"
 
     "github.com/dsoprea/go-geographic-attractor"
     "github.com/dsoprea/go-geographic-autogroup-images"
     "github.com/dsoprea/go-geographic-index"
-    "github.com/dsoprea/go-logging"
-    "github.com/jessevdk/go-flags"
-    "github.com/twpayne/go-kml"
 )
 
 var (
@@ -26,7 +31,8 @@ var (
 )
 
 const (
-    copyInfoFilenamePrefix = ".autogroup"
+    copyInfoFilenamePrefix  = ".autogroup"
+    largestGroupSizeMinimum = 50
 )
 
 type tallyItem struct {
@@ -54,8 +60,8 @@ func (tallies Tallies) Swap(i, j int) {
 // attractorParameters are the parameters common to anything that needs to load
 // a `geoattractorindex.CityIndex`.
 type attractorParameters struct {
-    CountriesFilepath string `long:"countries-filepath" description:"File-path of the GeoNames countries data (usually called 'countryInfo.txt')" required:"true"`
-    CitiesFilepath    string `long:"cities-filepath" description:"File-path of the GeoNames world-cities data (usually called 'allCountries.txt')" required:"true"`
+    CountriesFilepath string `long:"countries-filepath" description:"File-path of the GeoNames countries data (usually called 'countryInfo.txt')"`
+    CitiesFilepath    string `long:"cities-filepath" description:"File-path of the GeoNames world-cities data (usually called 'allCountries.txt')"`
 }
 
 // indexParameters are the parameters common to anything that needs to load a
@@ -81,8 +87,8 @@ type groupParameters struct {
     UnassignedFilepath        string `long:"unassigned-filepath" description:"File to write unassigned files to"`
     PrintStats                bool   `long:"stats" description:"Print statistics"`
     CopyPath                  string `long:"copy-into-path" description:"Copy grouped images into this path."`
-    ImageOutputPathTemplate   string `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}} {{.location}}{{.path_sep}}{{.year}}-{{.month_number}}-{{.day_number}}{{.path_sep}}{{.camera_model}}"`
-    NoPrintDotOutput          bool   `long:"no-dots" description:"Don't print dot progress output if copying"`
+    ImageOutputPathTemplate   string `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}}-{{.day_number}} {{.location}}{{.path_sep}}{{.camera_model}}"`
+    NoPrintProgressOutput     bool   `long:"no-dots" description:"Don't print dot progress output if copying"`
 
     sourceCatalogParameters
 }
@@ -160,7 +166,7 @@ func handleGroup(groupArguments groupParameters) {
     // We use a map to ensure uniqueness.
     destPaths := make(map[string]int)
 
-    printDotOutput := (groupArguments.NoPrintDotOutput == false)
+    printProgressOutput := (groupArguments.NoPrintProgressOutput == false)
     for i := 0; ; i++ {
         finishedGroupKey, finishedGroup, err := fg.FindNext()
         if err != nil {
@@ -181,7 +187,7 @@ func handleGroup(groupArguments groupParameters) {
         }
 
         if groupArguments.CopyPath != "" {
-            destPath, err := copyFile(fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate, printDotOutput)
+            destPath, err := copyFiles(fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate, printProgressOutput)
             log.PanicIf(err)
 
             destPaths[destPath] = len(finishedGroup)
@@ -208,6 +214,8 @@ func handleGroup(groupArguments groupParameters) {
         }
     }
 
+    // TODO(dustin): !! Finish writing image catalogs.
+
     // if collected != nil {
     //     // Only write source catalog if we were given a path to write it to (we
     //     // might be reading from multiple paths and we also do not want to
@@ -230,7 +238,7 @@ func handleGroup(groupArguments groupParameters) {
 
         tallies := make(Tallies, 0)
         for destPath, count := range destPaths {
-            if count < 50 {
+            if count < largestGroupSizeMinimum {
                 continue
             }
 
@@ -248,6 +256,7 @@ func handleGroup(groupArguments groupParameters) {
             // This sorts in reverse.
             sort.Sort(tallies)
 
+            fmt.Printf("\n")
             fmt.Printf("Largest Groups\n")
             fmt.Printf("==============\n")
 
@@ -265,6 +274,7 @@ func handleGroup(groupArguments groupParameters) {
     }
 
     unassignedRecords := fg.UnassignedRecords()
+
     if len(unassignedRecords) > 0 && groupArguments.UnassignedFilepath != "" {
         f, err := os.Create(groupArguments.UnassignedFilepath)
         log.PanicIf(err)
@@ -276,13 +286,14 @@ func handleGroup(groupArguments groupParameters) {
         }
     }
 
+    fmt.Printf("KML-FILEPATH: [%s]\n", groupArguments.KmlFilepath)
     if groupArguments.KmlFilepath != "" {
         err := writeGroupInfoAsKml(kmlTallies, groupArguments.KmlFilepath)
         log.PanicIf(err)
     }
 }
 
-func copyFile(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []*geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printDotOutput bool) (destPath string, err error) {
+func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []*geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printProgressOutput bool) (destPath string, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -336,52 +347,103 @@ func copyFile(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKe
     err = os.MkdirAll(destPath, 0755)
     log.PanicIf(err)
 
-    for _, gr := range finishedGroup {
-        filename := path.Base(gr.Filepath)
-        destFilepath := path.Join(destPath, filename)
-
-        destExt := path.Ext(destFilepath)
-        leftSide := destFilepath[:len(destFilepath)-len(destExt)]
-
-        // TODO(dustin): Add test.
-        for i := 1; i < 10; i++ {
-            if f, err := os.Open(destFilepath); err != nil {
-                if os.IsNotExist(err) == true {
-                    break
+    if printProgressOutput == true {
+        // Print the progress of copying all images in this group.
+        tqdm.With(iterators.Interval(0, len(finishedGroup)), folderName, func(v interface{}) (brk bool) {
+            defer func() {
+                if state := recover(); state != nil {
+                    err := log.Wrap(state.(error))
+                    log.PanicIf(err)
                 }
+            }()
 
-                log.Panic(err)
-            } else {
-                f.Close()
-            }
+            i := v.(int)
+            gr := finishedGroup[i]
 
-            // File already exists.
+            err := copyFile(destPath, gr)
+            log.PanicIf(err)
 
-            destFilepath = fmt.Sprintf("%s (%d)%s", leftSide, i+1, destExt)
+            return false
+        })
+    } else {
+        for _, gr := range finishedGroup {
+            err := copyFile(destPath, gr)
+            log.PanicIf(err)
         }
-
-        if printDotOutput == true {
-            fmt.Printf(".")
-        }
-
-        fromFile, err := os.Open(gr.Filepath)
-        log.PanicIf(err)
-
-        toFile, err := os.Create(destFilepath)
-        log.PanicIf(err)
-
-        _, err = io.Copy(toFile, fromFile)
-        log.PanicIf(err)
-
-        fromFile.Close()
-        toFile.Close()
-    }
-
-    if printDotOutput == true {
-        fmt.Printf("\n")
     }
 
     return destPath, nil
+}
+
+func copyFile(destPath string, gr *geoindex.GeographicRecord) (err error) {
+    defer func() {
+        if state := recover(); state != nil {
+            err = log.Wrap(state.(error))
+        }
+    }()
+
+    filename := path.Base(gr.Filepath)
+    destFilepath := path.Join(destPath, filename)
+
+    destExt := path.Ext(destFilepath)
+    leftSide := destFilepath[:len(destFilepath)-len(destExt)]
+
+    // Manage naming collisions.
+
+    // TODO(dustin): Add test.
+    for i := 1; i < 10; i++ {
+        if f, err := os.Open(destFilepath); err != nil {
+            if os.IsNotExist(err) == true {
+                break
+            }
+
+            log.Panic(err)
+        } else {
+            f.Close()
+        }
+
+        // File already exists.
+
+        fromImageHash := getFilepathSha1(gr.Filepath)
+        ToImageHash := getFilepathSha1(destFilepath)
+
+        // It's identical. Don't do anything.
+        if bytes.Compare(fromImageHash, ToImageHash) == 0 {
+            mainLogger.Debugf(nil, "Image already exists: [%s] => [%s]", gr.Filepath, destFilepath)
+            return nil
+        }
+
+        destFilepath = fmt.Sprintf("%s (%d)%s", leftSide, i+1, destExt)
+    }
+
+    fromFile, err := os.Open(gr.Filepath)
+    log.PanicIf(err)
+
+    toFile, err := os.Create(destFilepath)
+    log.PanicIf(err)
+
+    _, err = io.Copy(toFile, fromFile)
+    log.PanicIf(err)
+
+    fromFile.Close()
+    toFile.Close()
+
+    return nil
+}
+
+func getFilepathSha1(filepath string) []byte {
+    h := sha1.New()
+
+    f, err := os.Open(filepath)
+    log.PanicIf(err)
+
+    defer f.Close()
+
+    _, err = io.Copy(h, f)
+    log.PanicIf(err)
+
+    hashBytes := h.Sum(nil)[:20]
+    return hashBytes
 }
 
 func writeGroupInfoAsJson(fg *geoautogroup.FindGroups, collected []map[string]interface{}, filepath string) (err error) {

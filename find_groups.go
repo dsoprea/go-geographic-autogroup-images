@@ -5,10 +5,11 @@ import (
     "fmt"
     "time"
 
+    "github.com/dsoprea/go-logging"
+
     "github.com/dsoprea/go-geographic-attractor"
     "github.com/dsoprea/go-geographic-attractor/index"
     "github.com/dsoprea/go-geographic-index"
-    "github.com/dsoprea/go-logging"
     "github.com/dsoprea/go-time-index"
 )
 

@@ -1,8 +1,6 @@
 package geoautogroup
 
 import (
-    "os"
-
     "github.com/dsoprea/go-geographic-attractor/index"
     "github.com/dsoprea/go-geographic-attractor/parse"
     "github.com/dsoprea/go-geographic-index"
@@ -17,28 +15,15 @@ func GetCityIndex(countriesFilepath, citiesFilepath string) (ci *geoattractorind
         }
     }()
 
-    // Load countries.
-
-    f, err := os.Open(countriesFilepath)
+    gp, err := geoattractorparse.NewGeonamesParserWithFiles(countriesFilepath)
     log.PanicIf(err)
 
-    defer f.Close()
-
-    countries, err := geoattractorparse.BuildGeonamesCountryMapping(f)
+    f, err := geoattractorparse.GetCitydataReadCloser(citiesFilepath)
     log.PanicIf(err)
-
-    // Load cities.
-
-    gp := geoattractorparse.NewGeonamesParser(countries)
-
-    g, err := os.Open(citiesFilepath)
-    log.PanicIf(err)
-
-    defer g.Close()
 
     ci = geoattractorindex.NewCityIndex()
 
-    err = ci.Load(gp, g)
+    err = ci.Load(gp, f)
     log.PanicIf(err)
 
     return ci, nil
