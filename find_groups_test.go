@@ -1175,7 +1175,7 @@ func ExampleFindGroups_FindNext() {
 
     // Output:
     // GROUP KEY: GroupKey<TIME-KEY=[1970-01-01T00:00:00Z] NEAREST-CITY=[GeoNames,4887398] CAMERA-MODEL=[some model]>
-    // CITY: CityRecord<ID=[4887398] COUNTRY=[United States] PROVINCE-OR-STATE=[IL] CITY=[Chicago] POP=(2720546) LAT=(41.8500300000) LON=(-87.6500500000)>
+    // CITY: CityRecord<ID=[4887398] COUNTRY=[United States] PROVINCE-OR-STATE=[IL] CITY=[Chicago] POP=(2720546) LAT=(41.8500300000) LON=(-87.6500500000) S2=[880e2c50c345d397]>
     // (0): GeographicRecord<F=[file00.jpg] LAT=[41.850030] LON=[-87.650050] CELL=[9803822164217287575]>
     // (1): GeographicRecord<F=[file01.jpg] LAT=[41.850030] LON=[-87.650050] CELL=[9803822164217287575]>
     // (2): GeographicRecord<F=[file02.jpg] LAT=[41.850030] LON=[-87.650050] CELL=[9803822164217287575]>
