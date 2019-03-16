@@ -3,6 +3,7 @@ package geoautogroup
 import (
     "errors"
     "fmt"
+    "strings"
     "time"
 
     "github.com/dsoprea/go-logging"
@@ -60,6 +61,13 @@ func (gk GroupKey) String() string {
     log.PanicIf(err)
 
     return fmt.Sprintf("GroupKey<TIME-KEY=[%s] NEAREST-CITY=[%s] CAMERA-MODEL=[%s]>", string(textBytes), gk.NearestCityKey, gk.CameraModel)
+}
+
+func (gk GroupKey) KeyPhrase() string {
+    timestampPhrase := gk.TimeKey.Format(time.RFC3339)
+    timestampPhrase = strings.Replace(timestampPhrase, ":", "-", -1)
+
+    return fmt.Sprintf("%s-%s-%s", timestampPhrase, gk.NearestCityKey, gk.CameraModel)
 }
 
 type FindGroups struct {
