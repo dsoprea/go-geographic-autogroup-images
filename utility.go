@@ -1,6 +1,9 @@
 package geoautogroup
 
 import (
+    "fmt"
+    "time"
+
     "github.com/dsoprea/go-geographic-attractor/index"
     "github.com/dsoprea/go-geographic-attractor/parse"
     "github.com/dsoprea/go-geographic-index"
@@ -52,4 +55,8 @@ func GetTimeIndex(paths []string) (ti *geoindex.TimeIndex, err error) {
     }
 
     return ti, nil
+}
+
+func GetCondensedDatetime(t time.Time) string {
+    return fmt.Sprintf("%d%02d%02d-%02d%02d%02d", t.Year(), int(t.Month()), t.Day(), t.Hour(), t.Minute(), t.Second())
 }

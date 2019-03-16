@@ -16,6 +16,8 @@ import (
     "text/template"
 
     "github.com/dsoprea/go-logging"
+    "github.com/dsoprea/go-static-site-builder"
+    "github.com/dsoprea/go-static-site-builder/markdown"
     "github.com/jessevdk/go-flags"
     "github.com/sbwhitecap/tqdm"
     "github.com/sbwhitecap/tqdm/iterators"
@@ -31,8 +33,12 @@ var (
 )
 
 const (
-    copyInfoFilenamePrefix  = ".autogroup"
-    largestGroupSizeMinimum = 50
+    copyInfoFilenamePrefix     = ".autogroup"
+    largestGroupSizeMinimum    = 50
+    destHtmlCatalogDefaultName = "Grouped Image Catalog"
+
+    catalogImageWidth  = 600
+    catalogImageHeight = 0
 )
 
 type tallyItem struct {
@@ -73,7 +79,7 @@ type indexParameters struct {
 
 type sourceCatalogParameters struct {
     SourceCatalogPath string `long:"source-catalog-path" description:"Write a catalog to the given path using the source images"`
-    NoEmbedImages     string `long:"no-embed-images" description:"By default thumbnails are embedded directly into the catalog. Use the source image directly, instead."`
+    NoEmbedImages     bool   `long:"no-embed-images" description:"By default thumbnails are embedded directly into the catalog. Use the source image directly, instead."`
 }
 
 type groupParameters struct {
@@ -87,7 +93,7 @@ type groupParameters struct {
     UnassignedFilepath        string `long:"unassigned-filepath" description:"File to write unassigned files to"`
     PrintStats                bool   `long:"stats" description:"Print statistics"`
     CopyPath                  string `long:"copy-into-path" description:"Copy grouped images into this path."`
-    ImageOutputPathTemplate   string `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}}-{{.day_number}} {{.location}}{{.path_sep}}{{.camera_model}}"`
+    ImageOutputPathTemplate   string `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}}-{{.day_number}} {{.location}}{{.path_sep}}{{.camera_model}}/{{.hour}}.{{.minute}}"`
     NoPrintProgressOutput     bool   `long:"no-dots" description:"Don't print dot progress output if copying"`
 
     sourceCatalogParameters
@@ -143,6 +149,147 @@ func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups)
     return fg
 }
 
+type catalogItem struct {
+    groupKey   geoautogroup.GroupKey
+    linkWidget sitebuilder.LinkWidget
+}
+
+// sortableLinks is a sortable slice of catalog items. We use it to sort the
+// catalog in a sensible order.
+type sortableLinks []catalogItem
+
+func (sl sortableLinks) Len() int {
+    return len(sl)
+}
+
+func (sl sortableLinks) Swap(i, j int) {
+    sl[i], sl[j] = sl[j], sl[i]
+}
+
+func (sl sortableLinks) Less(i, j int) bool {
+    first, second := sl[i], sl[j]
+
+    if first.groupKey.TimeKey != second.groupKey.TimeKey {
+        return first.groupKey.TimeKey.Before(second.groupKey.TimeKey)
+    }
+
+    // The time matches. Compare the city.
+
+    if first.groupKey.NearestCityKey != second.groupKey.NearestCityKey {
+        return first.groupKey.NearestCityKey < second.groupKey.NearestCityKey
+    }
+
+    return first.groupKey.CameraModel < second.groupKey.CameraModel
+}
+
+// writeDestHtmlCatalog will write an HTML catalog to the disk. Note that the
+// catalog is organized by original groups whereas the the physical folders on
+// the disk may or may not be combined based on the folder-name template.
+func writeDestHtmlCatalog(groupArguments groupParameters, fg *geoautogroup.FindGroups, collected []map[string]interface{}, copyPath string, noEmbedImages bool) (err error) {
+    defer func() {
+        if state := recover(); state != nil {
+            err = log.Wrap(state.(error))
+        }
+    }()
+
+    // TODO(dustin): !! Finish implementing `noEmbedImages`.
+
+    sc := sitebuilder.NewSiteContext(groupArguments.CopyPath)
+    md := markdowndialect.NewMarkdownDialect()
+
+    sb := sitebuilder.NewSiteBuilder(destHtmlCatalogDefaultName, md, sc)
+
+    // Create content on root page.
+
+    rootNode := sb.Root()
+
+    nearestCityIndex := fg.NearestCityIndex()
+
+    catalogItems := make([]catalogItem, 0)
+    for _, item := range collected {
+        groupKey := item["group_key"].(geoautogroup.GroupKey)
+        groupedItems := item["records"].([]*geoindex.GeographicRecord)
+
+        cityRecord := nearestCityIndex[groupKey.NearestCityKey]
+
+        timePhrase := fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", groupKey.TimeKey.Year(), groupKey.TimeKey.Month(), groupKey.TimeKey.Day(), groupKey.TimeKey.Hour(), groupKey.TimeKey.Minute(), groupKey.TimeKey.Second())
+        childPageTitle := fmt.Sprintf("%s UTC (%s) %s", timePhrase, cityRecord.CityAndProvinceState(), groupKey.CameraModel)
+
+        navbarTitle := fmt.Sprintf("%s (%d)", childPageTitle, len(groupedItems))
+
+        childPageId, err := writeDestHtmlCatalogGroup(rootNode, groupKey, cityRecord, childPageTitle, groupedItems)
+        log.PanicIf(err)
+
+        catalogLw := sitebuilder.NewLinkWidget(navbarTitle, sitebuilder.NewSitePageLocalResourceLocator(sb, childPageId))
+
+        ci := catalogItem{
+            groupKey:   groupKey,
+            linkWidget: catalogLw,
+        }
+
+        catalogItems = append(catalogItems, ci)
+    }
+
+    stl := sortableLinks(catalogItems)
+    sort.Sort(stl)
+
+    catalogLinks := make([]sitebuilder.LinkWidget, len(stl))
+    for i, ci := range stl {
+        catalogLinks[i] = ci.linkWidget
+    }
+
+    rootPb := rootNode.Builder()
+
+    // Add navbar with page links.
+
+    nw := sitebuilder.NewNavbarWidget(catalogLinks)
+
+    // TODO(dustin): !! Replace this with a list of descriptions and the first image.
+    err = rootPb.AddVerticalNavbar(nw, "Groups")
+    log.PanicIf(err)
+
+    // Render and write.
+
+    err = sb.WriteToPath()
+    log.PanicIf(err)
+
+    return nil
+}
+
+func writeDestHtmlCatalogGroup(rootNode *sitebuilder.SiteNode, groupKey geoautogroup.GroupKey, cr geoattractor.CityRecord, pageTitle string, groupedItems []*geoindex.GeographicRecord) (childPageId string, err error) {
+    defer func() {
+        if state := recover(); state != nil {
+            err = log.Wrap(state.(error))
+        }
+    }()
+
+    // Add a new page.
+
+    childPageId = groupKey.KeyPhrase()
+    childNode, err := rootNode.AddChildNode(childPageId, pageTitle)
+    log.PanicIf(err)
+
+    childPb := childNode.Builder()
+
+    // Add images.
+
+    for _, gr := range groupedItems {
+        // TODO(dustin): !! We need to use a relative file-path.
+        lrl := sitebuilder.NewLocalResourceLocator(gr.Filepath)
+
+        filename := path.Base(gr.Filepath)
+
+        // TODO(dustin): !! Insert descriptions for each image.
+        // TODO(dustin): !! We should also take a nil-able link that we will link the image against if present.
+        iw := sitebuilder.NewImageWidget(filename, lrl, catalogImageWidth, catalogImageHeight)
+
+        err = childPb.AddContentImage(iw)
+        log.PanicIf(err)
+    }
+
+    return childPageId, nil
+}
+
 func handleGroup(groupArguments groupParameters) {
     defer func() {
         if state := recover(); state != nil {
@@ -151,22 +298,24 @@ func handleGroup(groupArguments groupParameters) {
         }
     }()
 
-    sessionTimestampPhraseBytes, err := time.Now().MarshalText()
-    log.PanicIf(err)
-
-    sessionTimestampPhrase := string(sessionTimestampPhraseBytes)
+    sessionTimestampPhrase := geoautogroup.GetCondensedDatetime(time.Now())
 
     fg := getFindGroups(groupArguments)
 
     kmlTallies := make(map[geoattractor.CityRecord][2]int)
     collected := make([]map[string]interface{}, 0)
 
-    imageOutputPathTemplate := template.Must(template.New("image output template").Parse(groupArguments.ImageOutputPathTemplate))
-
-    // We use a map to ensure uniqueness.
-    destPaths := make(map[string]int)
+    imageOutputPathTemplate := template.Must(template.New("group path template").Parse(groupArguments.ImageOutputPathTemplate))
 
     printProgressOutput := (groupArguments.NoPrintProgressOutput == false)
+
+    // Depending on the folder-template, the groups may, and probably will, be
+    // merged-together to some degree on disk (our groups might differ in
+    // minutes but may be stored on disk by date). So, keep track of them based
+    // on the on-disk folder rather than by their in-memory names (found via
+    // `String()`).
+    binnedImages := make(map[string][]*geoindex.GeographicRecord)
+
     for i := 0; ; i++ {
         finishedGroupKey, finishedGroup, err := fg.FindNext()
         if err != nil {
@@ -187,16 +336,16 @@ func handleGroup(groupArguments groupParameters) {
         }
 
         if groupArguments.CopyPath != "" {
-            destPath, err := copyFiles(fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate, printProgressOutput)
+            err := copyFiles(fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate, printProgressOutput, binnedImages)
             log.PanicIf(err)
-
-            destPaths[destPath] = len(finishedGroup)
         }
 
         // TODO(dustin): Just to get rid of incidental pictures from the journey.
         if len(finishedGroup) < groupArguments.KmlMinimumGroupImageCount {
             continue
         }
+
+        // TODO(dustin): !! Why are we not seeing tallies?
 
         nearestCityIndex := fg.NearestCityIndex()
         cityRecord := nearestCityIndex[finishedGroupKey.NearestCityKey]
@@ -214,38 +363,42 @@ func handleGroup(groupArguments groupParameters) {
         }
     }
 
-    // TODO(dustin): !! Finish writing image catalogs.
+    if collected != nil {
+        // TODO(dustin): !! Finish.
+        //
+        // // Only write source catalog if we were given a path to write it to (we
+        // // might be reading from multiple paths and we also do not want to
+        // // change the input paths without permission).
+        // if groupArguments.SourceCatalogPath != "" {
+        //     err := writeSourceHtmlCatalog(collected, groupArguments.SourceCatalogPath, groupArguments.NoEmbedImages)
+        //     log.PanicIf(err)
+        // }
 
-    // if collected != nil {
-    //     // Only write source catalog if we were given a path to write it to (we
-    //     // might be reading from multiple paths and we also do not want to
-    //     // change the input paths without permission).
-    //     if groupArguments.SourceCatalogPath != "" {
-    //         err := writeSourceHtmlCatalog(collected, groupArguments.SourceCatalogPath, groupArguments.NoEmbedImages)
-    //         log.PanicIf(err)
-    //     }
+        // Automatically write a destination catalog if we're doing a copy.
+        if groupArguments.CopyPath != "" {
+            destCatalogPath := path.Join(groupArguments.CopyPath, "catalog", sessionTimestampPhrase)
 
-    //     // Automatically write a destination catalog if we're doing a copy.
-    //     if groupArguments.CopyPath != "" {
-    //         err := writeDestHtmlCatalog(collected, sessionTimestampPhrase, groupArguments.CopyPath, groupArguments.NoEmbedImages)
-    //         log.PanicIf(err)
-    //     }
-    // }
+            fmt.Printf("\n")
+            fmt.Printf("Writing catalog to: %s\n", destCatalogPath)
 
-    if len(destPaths) > 0 {
-        err := writeCopyPathInfo(sessionTimestampPhrase, groupArguments.CopyPath, destPaths)
+            err := writeDestHtmlCatalog(groupArguments, fg, collected, destCatalogPath, groupArguments.NoEmbedImages)
+            log.PanicIf(err)
+        }
+    }
+
+    if len(binnedImages) > 0 {
+        err := writeCopyPathInfo(groupArguments, sessionTimestampPhrase, groupArguments.CopyPath, binnedImages)
         log.PanicIf(err)
 
         tallies := make(Tallies, 0)
-        for destPath, count := range destPaths {
+        for folderName, entries := range binnedImages {
+            count := len(entries)
             if count < largestGroupSizeMinimum {
                 continue
             }
 
-            destRelPath := destPath[len(groupArguments.CopyPath)+1:]
-
             ti := tallyItem{
-                name:  destRelPath,
+                name:  folderName,
                 count: count,
             }
 
@@ -269,7 +422,49 @@ func handleGroup(groupArguments groupParameters) {
     // TODO(dustin): !! Make sure that files that returned nil,nil from the image processor in go-geographic-index is logged as unassigned. OTherwise, we'll have no chance of debugging image issues.
 
     if groupArguments.JsonFilepath != "" {
-        err := writeGroupInfoAsJson(fg, collected, groupArguments.JsonFilepath)
+        encodedGroups := make([]map[string]interface{}, len(collected))
+        for i, groupInfo := range collected {
+            groupKey := groupInfo["group_key"].(geoautogroup.GroupKey)
+            originalRecords := groupInfo["records"].([]*geoindex.GeographicRecord)
+
+            updatedRecords := make([]map[string]interface{}, len(originalRecords))
+            locationSourceRecords := make(map[string]map[string]interface{})
+            for i, gr := range originalRecords {
+                encoded := gr.Encode()
+
+                encodedRelationships := encoded["relationships"].(map[string][]map[string]interface{})
+
+                if len(encodedRelationships) == 0 {
+                    delete(encodedRelationships, "relationships")
+                } else {
+                    updatedRelationships := make(map[string][]string)
+                    for type_, encodedGrList := range encodedRelationships {
+                        filepaths := make([]string, len(encodedGrList))
+                        for i, encodedGr := range encodedGrList {
+                            filepath := encodedGr["filepath"].(string)
+                            filepaths[i] = filepath
+                            locationSourceRecords[filepath] = encodedGr
+                        }
+
+                        updatedRelationships[type_] = filepaths
+                    }
+
+                    encoded["relationships"] = updatedRelationships
+                }
+
+                updatedRecords[i] = encoded
+            }
+
+            item := map[string]interface{}{
+                "group_key": groupKey,
+                "records":   updatedRecords,
+                "locations": locationSourceRecords,
+            }
+
+            encodedGroups[i] = item
+        }
+
+        err := writeGroupInfoAsJson(fg, encodedGroups, groupArguments.JsonFilepath)
         log.PanicIf(err)
     }
 
@@ -292,7 +487,7 @@ func handleGroup(groupArguments groupParameters) {
     }
 }
 
-func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []*geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printProgressOutput bool) (destPath string, err error) {
+func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []*geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printProgressOutput bool, binnedImages map[string][]*geoindex.GeographicRecord) (err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -327,6 +522,9 @@ func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupK
         "month_number":            fmt.Sprintf("%02d", timeKey.Month()),
         "month_name":              fmt.Sprintf("%s", timeKey.Month()),
         "day_number":              fmt.Sprintf("%02d", timeKey.Day()),
+        "hour":                    fmt.Sprintf("%02d", timeKey.Hour()),
+        "minute":                  fmt.Sprintf("%02d", timeKey.Minute()),
+        "second":                  fmt.Sprintf("%02d", timeKey.Second()),
         "city_and_province_state": cityprovince,
         "location":                location,
         "country":                 cityRecord.Country,
@@ -341,14 +539,34 @@ func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupK
 
     folderName := b.String()
 
-    destPath = path.Join(copyRootPath, folderName)
+    destPath := path.Join(copyRootPath, folderName)
 
     err = os.MkdirAll(destPath, 0755)
     log.PanicIf(err)
 
+    tick := func(gr *geoindex.GeographicRecord) {
+        if list, found := binnedImages[folderName]; found == true {
+            list = append(list, gr)
+        } else {
+            binnedImages[folderName] = []*geoindex.GeographicRecord{
+                gr,
+            }
+        }
+    }
+
     if printProgressOutput == true {
         // Print the progress of copying all images in this group.
-        tqdm.With(iterators.Interval(0, len(finishedGroup)), folderName, func(v interface{}) (brk bool) {
+
+        titleTemplateRaw := "{{.year}}-{{.month_number}}-{{.day_number}} {{.hour}}:{{.minute}}:{{.second}}  {{.location}}{{.path_sep}}{{.camera_model}}"
+        titleTemplate := template.Must(template.New("group title template").Parse(titleTemplateRaw))
+
+        b := new(bytes.Buffer)
+        err = titleTemplate.Execute(b, replacements)
+        log.PanicIf(err)
+
+        title := b.String()
+
+        tqdm.With(iterators.Interval(0, len(finishedGroup)), title, func(v interface{}) (brk bool) {
             defer func() {
                 if state := recover(); state != nil {
                     err := log.Wrap(state.(error))
@@ -359,6 +577,8 @@ func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupK
             i := v.(int)
             gr := finishedGroup[i]
 
+            tick(gr)
+
             err := copyFile(destPath, gr)
             log.PanicIf(err)
 
@@ -366,12 +586,14 @@ func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupK
         })
     } else {
         for _, gr := range finishedGroup {
+            tick(gr)
+
             err := copyFile(destPath, gr)
             log.PanicIf(err)
         }
     }
 
-    return destPath, nil
+    return nil
 }
 
 func copyFile(destPath string, gr *geoindex.GeographicRecord) (err error) {
@@ -473,7 +695,7 @@ func writeGroupInfoAsJson(fg *geoautogroup.FindGroups, collected []map[string]in
     return nil
 }
 
-func writeCopyPathInfo(sessionTimestampPhrase, destRootPath string, destPaths map[string]int) (err error) {
+func writeCopyPathInfo(groupArguments groupParameters, sessionTimestampPhrase, destRootPath string, binnedImages map[string][]*geoindex.GeographicRecord) (err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -481,7 +703,9 @@ func writeCopyPathInfo(sessionTimestampPhrase, destRootPath string, destPaths ma
     }()
 
     destPathTallies := make(map[string]int)
-    for destPath, _ := range destPaths {
+    for folderName, _ := range binnedImages {
+        destPath := path.Join(groupArguments.CopyPath, folderName)
+
         entries, err := ioutil.ReadDir(destPath)
         log.PanicIf(err)
 

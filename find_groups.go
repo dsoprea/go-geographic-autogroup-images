@@ -43,6 +43,11 @@ const (
     LocationMatchStrategySparseData = "sparse data"
 )
 
+// Relationship types that we might record in a `geoindex.GeographicRecord`.
+const (
+    GeographicRelationshipSourceLocationRecord = "source_location_record"
+)
+
 var (
     findGroupsLogger = log.NewLogger("geogroup.find_groups")
 )
@@ -390,6 +395,7 @@ func (fg *FindGroups) getCurrentPositionImages() (outputRecords []currentImageRe
 
             comment := fmt.Sprintf("Updated geographic from location with filename [%s], timestamp [%s], and cell [%s]", path.Base(locationGr.Filepath), locationGr.Timestamp.Format(time.RFC3339), cell.ToToken())
             imageGr.AddComment(comment)
+            imageGr.AddRelated(locationGr, GeographicRelationshipSourceLocationRecord)
         }
 
         // Now, we'll construct the group that this image should be a part
