@@ -31,6 +31,10 @@ type bufferedGroup struct {
     firstTimeKey time.Time
     lastTimeKey  time.Time
     images       []*bufferedImage
+
+    // locationIndex is a map of nearest-cities to the first index at which they
+    // appear.
+    locationIndex map[string]int
 }
 
 func (bg *bufferedGroup) dump(printDetail bool) {
@@ -83,19 +87,26 @@ func (bg *bufferedGroup) popCompleteGroup() (nearestCityKey string, group []*geo
     }
 
     group = make([]*geoindex.GeographicRecord, 0)
-    nearestCityKey = ""
+    firstNearestCityKey := ""
+    firstTimeKey := time.Time{}
     for _, bi := range bg.images {
-        gr := bi.gr
+        if firstNearestCityKey == "" {
+            firstNearestCityKey = bi.nearestCityKey
+        } else if bi.nearestCityKey != firstNearestCityKey {
+            // Break if the current image belongs to a different city than the last.
 
-        if nearestCityKey == "" {
-            nearestCityKey = bi.nearestCityKey
-        }
-
-        if bi.effectiveTimekey != bg.firstTimeKey {
             break
         }
 
-        group = append(group, gr)
+        if firstTimeKey.IsZero() == true {
+            firstTimeKey = bi.effectiveTimekey
+        } else if bi.effectiveTimekey != firstTimeKey {
+            // Break if the current image belongs to a different time-key than the last.
+
+            break
+        }
+
+        group = append(group, bi.gr)
     }
 
     len_ := len(group)
@@ -113,7 +124,9 @@ func (bg *bufferedGroup) popCompleteGroup() (nearestCityKey string, group []*geo
         bg.firstTimeKey = bg.images[0].effectiveTimekey
     }
 
-    return nearestCityKey, group
+    bg.updateLocationIndex()
+
+    return firstNearestCityKey, group
 }
 
 func (bg *bufferedGroup) popPartialGroup() (nearestCityKey string, group []*geoindex.GeographicRecord) {
@@ -141,6 +154,8 @@ func (bg *bufferedGroup) popPartialGroup() (nearestCityKey string, group []*geoi
     bg.firstTimeKey = time.Time{}
     bg.lastTimeKey = time.Time{}
 
+    bg.updateLocationIndex()
+
     return nearestCityKey, group
 }
 
@@ -151,28 +166,59 @@ func (bg *bufferedGroup) isEmpty() bool {
 }
 
 func (bg *bufferedGroup) pushImage(nearestCityKey string, gr *geoindex.GeographicRecord) {
-    // fmt.Printf("BG: PUSHING: [%s] [%s]\n", nearestCityKey, gr.Filepath)
-
     // If the current image and the last-added image both have the same
     // location, curry that time-key to this image (since they are the same
     // model and location and will now have the same time-key, they'll be
     // grouped together).
     lastBi := bg.images[len(bg.images)-1]
-    // fmt.Printf("CURRENT LAST-BI NEAREST-CITY-KEY: [%s]\n", lastBi.nearestCityKey)
 
     var effectiveTimekey time.Time
     if lastBi.nearestCityKey == nearestCityKey {
-        // fmt.Printf("> BOTTOM NEAREST-CITY-KEY MATCHES CITY [%s]: Setting time-key [%s]\n", nearestCityKey, bg.lastTimeKey)
         effectiveTimekey = bg.lastTimeKey
     }
 
     // Now, append.
 
     bi := newBufferedImage(nearestCityKey, gr, effectiveTimekey)
-    // fmt.Printf("> EFF TIME-KEY: [%s]\n", bi.effectiveTimekey)
 
     bg.images = append(bg.images, bi)
     bg.lastTimeKey = bi.effectiveTimekey
+
+    len_ := len(bg.images)
+
+    // If our city has already appeared within the current time interval, smooth
+    // all of the cities of the images between then and now to be the same city.
+    // This could easily be caused by just turning around on a walk and/or
+    // otherwise backtracking and entering another city near the pivot point
+    // within the resolution of the time-key interval.
+    if index, found := bg.locationIndex[nearestCityKey]; found == true {
+        // Only update if the item before the item we just added is a different
+        // city than us. Otherwise, we'll just update and reupdate all of the
+        // adjacent images that we add that we already know to have the same
+        // city.
+        if len_ > 2 && bg.images[len_-2].nearestCityKey != nearestCityKey {
+            for _, bi := range bg.images[index+1:] {
+                fmt.Printf("SMOOTHING: %s [%s]->[%s]\n", bi.gr, bi.nearestCityKey, nearestCityKey)
+                bi.nearestCityKey = nearestCityKey
+            }
+        }
+
+        bg.updateLocationIndex()
+    } else {
+        bg.locationIndex[nearestCityKey] = len(bg.images) - 1
+    }
+}
+
+// updateLocationIndex replaces the current location index with an up-to-date
+// one. This is only called if we perform smoothing on the locations on the
+// images.
+func (bg *bufferedGroup) updateLocationIndex() {
+    bg.locationIndex = make(map[string]int)
+    for i, bi := range bg.images {
+        if _, found := bg.locationIndex[bi.nearestCityKey]; found == false {
+            bg.locationIndex[bi.nearestCityKey] = i
+        }
+    }
 }
 
 func initBufferedGroup(nearestCityKey string, initialGr *geoindex.GeographicRecord) *bufferedGroup {
@@ -183,9 +229,10 @@ func initBufferedGroup(nearestCityKey string, initialGr *geoindex.GeographicReco
     }
 
     return &bufferedGroup{
-        firstTimeKey: initialBi.effectiveTimekey,
-        lastTimeKey:  initialBi.effectiveTimekey,
-        images:       images,
+        firstTimeKey:  initialBi.effectiveTimekey,
+        lastTimeKey:   initialBi.effectiveTimekey,
+        images:        images,
+        locationIndex: make(map[string]int),
     }
 }
 
@@ -303,12 +350,6 @@ func (igb *iterativeGroupBuffers) popFirstPartialGroup() (timeKey time.Time, nea
 func (igb *iterativeGroupBuffers) pushImage(nearestCityKey string, gr *geoindex.GeographicRecord) {
     im := gr.Metadata.(geoindex.ImageMetadata)
     cameraModel := im.CameraModel
-
-    // TODO(dustin): !!
-    //
-    // 1. We need to implement smoothing. As soon as we push a new time-key, we need to detect if we've encountered the same location twice with a different location in the middle. If so, then update those erroneous locations in the middle to the one before/after. This will mitigate jitter as well as manage walks where we turn around and retrace our steps.
-    // 2. Given (1), we need to update to only return the records for the first time-key up to a change in location.
-    //
 
     if existingGroupBuffer, found := igb.groupsByCameraModel[cameraModel]; found == true {
         existingGroupBuffer.pushImage(nearestCityKey, gr)
