@@ -3,10 +3,12 @@ package geoautogroup
 import (
     "errors"
     "fmt"
+    "path"
     "strings"
     "time"
 
     "github.com/dsoprea/go-logging"
+    "github.com/golang/geo/s2"
 
     "github.com/dsoprea/go-geographic-attractor"
     "github.com/dsoprea/go-geographic-attractor/index"
@@ -84,6 +86,8 @@ type FindGroups struct {
     // coalescenceWindowDuration time.Duration
 
     locationMatcherFn LocationMatcherFn
+
+    bufferedGroups *iterativeGroupBuffers
 }
 
 type LocationMatcherFn func(imageTe timeindex.TimeEntry) (matchedTe timeindex.TimeEntry, err error)
@@ -92,6 +96,8 @@ func NewFindGroups(locationTs timeindex.TimeSlice, imageTs timeindex.TimeSlice, 
     if len(locationTs) == 0 {
         log.Panicf("no locations")
     }
+
+    igb := newIterativeGroupBuffers()
 
     fg := &FindGroups{
         locationTs:        locationTs,
@@ -103,6 +109,7 @@ func NewFindGroups(locationTs timeindex.TimeSlice, imageTs timeindex.TimeSlice, 
         currentGroup:      make(map[string][]*geoindex.GeographicRecord, 0),
         // roundingWindowDuration:    DefaultRoundingWindowDuration,
         // coalescenceWindowDuration: DefaultCoalescenceWindowDuration,
+        bufferedGroups: igb,
     }
 
     fg.locationMatcherFn = fg.findLocationByTimeBestGuess
@@ -320,30 +327,6 @@ func (fg *FindGroups) findLocationByTimeWithSparseLocations(imageTe timeindex.Ti
     return timeindex.TimeEntry{}, ErrNoNearLocationRecord
 }
 
-// flushCurrentGroup will capture the current set of grouped images, truncate
-// the list, set the next group key as the current group key, and return. Note
-// that this only acts on the current group of the same camera-model as the next
-// group-key.
-func (fg *FindGroups) flushCurrentGroup(nextGroupKey GroupKey) (finishedGroupKey GroupKey, finishedGroup []*geoindex.GeographicRecord, err error) {
-    defer func() {
-        if state := recover(); state != nil {
-            err = log.Wrap(state.(error))
-        }
-    }()
-
-    cameraModel := nextGroupKey.CameraModel
-
-    // Note that this will be nil if we don't currently have anything buffered.
-    finishedGroup = fg.currentGroup[cameraModel]
-
-    delete(fg.currentGroup, cameraModel)
-
-    finishedGroupKey = fg.currentGroupKey[cameraModel]
-    fg.currentGroupKey[cameraModel] = nextGroupKey
-
-    return finishedGroupKey, finishedGroup, nil
-}
-
 // getAlignedEpoch returns an aligned epoch time. Used to determine grouping.
 func getAlignedEpoch(epoch int64) int64 {
     return epoch - epoch%TimeKeyAlignment
@@ -354,6 +337,101 @@ func getAlignedTime(t time.Time) time.Time {
     epoch = getAlignedEpoch(epoch)
 
     return time.Unix(epoch, 0).UTC()
+}
+
+type currentImageRecord struct {
+    ImageUnixTime    time.Time
+    GeographicRecord *geoindex.GeographicRecord
+    NearestCityKey   string
+}
+
+// getCurrentPositionImages returns the images as the current position in the
+// image time-series index.
+func (fg *FindGroups) getCurrentPositionImages() (outputRecords []currentImageRecord, err error) {
+    defer func() {
+        if state := recover(); state != nil {
+            err = log.Wrap(state.(error))
+        }
+    }()
+
+    imageTe := fg.imageTs[fg.currentImagePosition]
+    outputRecords = make([]currentImageRecord, 0)
+    for _, item := range imageTe.Items {
+        // TODO(dustin): !! We'll skip images when we encounter a new group and return the existing one, if there are additional images on this timestamps. We should just set a flag and then terminate after we finish processing these items.
+
+        imageGr := item.(*geoindex.GeographicRecord)
+
+        if imageGr.HasGeographic == false {
+            // TODO(dustin): Note that we match for a location based on the timestamp in the index but that we group based on the timestamp in the image. The original was an earlier design but going with the last will likely always be at least identical accuracy and the design is a little more intuitive. Refactor the location-matching to use the image time.
+            matchedTe, err := fg.locationMatcherFn(imageTe)
+            if err != nil {
+                if log.Is(err, ErrNoNearLocationRecord) == true {
+                    fg.addUnassigned(imageGr, SkipReasonNoNearLocationRecord)
+                    continue
+                }
+
+                log.Panic(err)
+            }
+
+            locationItem := matchedTe.Items[0]
+            locationGr := locationItem.(*geoindex.GeographicRecord)
+
+            // The location index should exclusively be loaded with
+            // geographic data. This should never happen.
+            if locationGr.HasGeographic == false {
+                log.Panicf("location record indicates no geographic data; this should never happen")
+            }
+
+            imageGr.Latitude = locationGr.Latitude
+            imageGr.Longitude = locationGr.Longitude
+            imageGr.S2CellId = locationGr.S2CellId
+
+            cell := s2.CellID(locationGr.S2CellId)
+
+            comment := fmt.Sprintf("Updated geographic from location with filename [%s], timestamp [%s], and cell [%s]", path.Base(locationGr.Filepath), locationGr.Timestamp.Format(time.RFC3339), cell.ToToken())
+            imageGr.AddComment(comment)
+        }
+
+        // Now, we'll construct the group that this image should be a part
+        // of. Later, we'll compare the groups of each image to the groups
+        // of adjacent images in order to determine which should be binned
+        // together.
+
+        // First, find a city to associate this location with.
+
+        // TODO(dustin): !! We already have a cell-ID in `imageGr`. Use that directly rather than forcing downstream recalculations of it by not passing it?
+        sourceName, _, cr, err := fg.cityIndex.Nearest(imageGr.Latitude, imageGr.Longitude)
+
+        if err != nil {
+            if log.Is(err, geoattractorindex.ErrNoNearestCity) == true {
+                fg.addUnassigned(imageGr, SkipReasonNoNearCity)
+                continue
+            }
+
+            log.Panic(err)
+        }
+
+        nearestCityKey := fmt.Sprintf("%s,%s", sourceName, cr.Id)
+        fg.nearestCityIndex[nearestCityKey] = cr
+
+        cir := currentImageRecord{
+            ImageUnixTime:    imageTe.Time,
+            GeographicRecord: imageGr,
+            NearestCityKey:   nearestCityKey,
+        }
+
+        outputRecords = append(outputRecords, cir)
+    }
+
+    return outputRecords, nil
+}
+
+func getGeographicRecordTimeKey(gr *geoindex.GeographicRecord) time.Time {
+    imageUnixTime := gr.Timestamp.Unix()
+    normalImageUnixTime := getAlignedEpoch(imageUnixTime)
+
+    timeKey := time.Unix(normalImageUnixTime, 0).UTC()
+    return timeKey
 }
 
 // FindNext returns the next set of grouped-images along with the actual
@@ -385,183 +463,66 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []*ge
         }
     }()
 
-    imageIndexTs := fg.imageTs
+    // Try popping immediately.
 
-    if fg.currentImagePosition >= len(imageIndexTs) {
-        // Do one iteration, at most, just to pop exactly one group out of
-        // the buffer if we have anything.
-        //
-        // We use `fg.currentGroup` rather than `fg.currentGroupKey`, directly,
-        // because `flushCurrentGroup()` will always leave at least one item in
-        // `fg.currentGroupKey`.
-        for cameraModel, _ := range fg.currentGroup {
-            currentGroupKey := fg.currentGroupKey[cameraModel]
+    if fg.bufferedGroups.haveAnyCompleteGroups() != "" {
+        timeKey, nearestCityKey, cameraModel, images := fg.bufferedGroups.popFirstCompleteGroup()
 
-            finishedGroupKey, finishedGroup, err = fg.flushCurrentGroup(currentGroupKey)
-            log.PanicIf(err)
-
-            if finishedGroup == nil {
-                log.Panicf("there are no grouped images as expected (1)")
-            }
-
-            return finishedGroupKey, finishedGroup, nil
+        gk := GroupKey{
+            TimeKey:        timeKey,
+            NearestCityKey: nearestCityKey,
+            CameraModel:    cameraModel,
         }
 
-        return GroupKey{}, nil, ErrNoMoreGroups
+        return gk, images, nil
     }
+
+    // If we get here, no data. Try loading.
+
+    imageIndexTs := fg.imageTs
 
     // Loop through all timestamps starting from where we left off.
     for ; fg.currentImagePosition < len(imageIndexTs); fg.currentImagePosition++ {
-        imageTe := imageIndexTs[fg.currentImagePosition]
-        for _, item := range imageTe.Items {
-            // TODO(dustin): !! We'll skip images when we encounter a new group and return the existing one, if there are additional images on this timestamps. We should just set a flag and then terminate after we finish processing these items.
+        currentImageRecords, err := fg.getCurrentPositionImages()
+        log.PanicIf(err)
 
-            imageGr := item.(*geoindex.GeographicRecord)
+        for _, cir := range currentImageRecords {
+            imageGr := cir.GeographicRecord
+            nearestCityKey := cir.NearestCityKey
 
-            if imageGr.HasGeographic == false {
-                matchedTe, err := fg.locationMatcherFn(imageTe)
-                if err != nil {
-                    if log.Is(err, ErrNoNearLocationRecord) == true {
-                        fg.addUnassigned(imageGr, SkipReasonNoNearLocationRecord)
-                        continue
-                    }
-
-                    log.Panic(err)
-                }
-
-                locationItem := matchedTe.Items[0]
-                locationGr := locationItem.(*geoindex.GeographicRecord)
-
-                // The location index should exclusively be loaded with
-                // geographic data. This should never happen.
-                if locationGr.HasGeographic == false {
-                    log.Panicf("location record indicates no geographic data; this should never happen")
-                }
-
-                imageGr.Latitude = locationGr.Latitude
-                imageGr.Longitude = locationGr.Longitude
-                imageGr.S2CellId = locationGr.S2CellId
-            }
-
-            // If we got here, we either have or have found a location for the
-            // given image.
-
-            im := imageGr.Metadata.(geoindex.ImageMetadata)
-            cameraModel := im.CameraModel
-
-            // Now, we'll construct the group that this image should be a part
-            // of. Later, we'll compare the groups of each image to the groups
-            // of adjacent images in order to determine which should be binned
-            // together.
-
-            // First, find a city to associate this location with.
-
-            sourceName, _, cr, err := fg.cityIndex.Nearest(imageGr.Latitude, imageGr.Longitude)
-            if err != nil {
-                if log.Is(err, geoattractorindex.ErrNoNearestCity) == true {
-                    fg.addUnassigned(imageGr, SkipReasonNoNearCity)
-                    continue
-                }
-
-                log.Panic(err)
-            }
-
-            nearestCityKey := fmt.Sprintf("%s,%s", sourceName, cr.Id)
-            fg.nearestCityIndex[nearestCityKey] = cr
-
-            // Determine what timestamp to associate this image to. The time-
-            // key is the image's time rounded down to a ten-minute alignment.
-
-            imageUnixTime := imageTe.Time.Unix()
-            normalImageUnixTime := getAlignedEpoch(imageUnixTime)
-
-            timeKey := time.Unix(normalImageUnixTime, 0).UTC()
-
-            currentGroupKey := fg.currentGroupKey[cameraModel]
-            currentGroupKeyTimeKey := currentGroupKey.TimeKey
-            if currentGroupKeyTimeKey.IsZero() == false {
-                // We're already tracking a group for this camera model.
-
-                // Check our sanity.
-                if currentGroupKey.CameraModel != cameraModel {
-                    log.Panicf("currently tracked camera-model does not equal current image camera-model where we are")
-                }
-
-                if currentGroupKey.NearestCityKey == nearestCityKey {
-                    // If the group we're currently tracking is the same city,
-                    // reuse the time-key. This means that adjacent groups will
-                    // always be merged if the only difference is time.
-
-                    timeKey = currentGroupKeyTimeKey
-                }
-
-                // Given the canges above, if the last group's other factors
-                // also match the factors we're going to assemble below, this
-                // group-key will end up being the same.
-            }
-
-            // Build the group key.
-
-            gk := GroupKey{
-                TimeKey:        timeKey,
-                NearestCityKey: nearestCityKey,
-                CameraModel:    cameraModel,
-            }
-
-            currentGroupKey, currentGroupKeyFound := fg.currentGroupKey[cameraModel]
-            if currentGroupKeyFound == false {
-                fg.currentGroupKey[cameraModel] = gk
-
-                fg.currentGroup[cameraModel] = []*geoindex.GeographicRecord{
-                    imageGr,
-                }
-            } else if gk != currentGroupKey {
-                finishedGroupKey, finishedGroup, err = fg.flushCurrentGroup(gk)
-                log.PanicIf(err)
-
-                // The "current" group-key has been update but we still have to
-                // push our current image into the buffer.
-
-                if existingGroup, found := fg.currentGroup[cameraModel]; found == true {
-                    fg.currentGroup[cameraModel] = append(existingGroup, imageGr)
-                } else {
-                    fg.currentGroup[cameraModel] = []*geoindex.GeographicRecord{
-                        imageGr,
-                    }
-                }
-
-                if finishedGroup != nil {
-                    fg.currentImagePosition++
-
-                    return finishedGroupKey, finishedGroup, nil
-                }
-            } else {
-                if existingGroup, found := fg.currentGroup[cameraModel]; found == true {
-                    fg.currentGroup[cameraModel] = append(existingGroup, imageGr)
-                } else {
-                    fg.currentGroup[cameraModel] = []*geoindex.GeographicRecord{
-                        imageGr,
-                    }
-                }
-            }
+            fg.bufferedGroups.pushImage(nearestCityKey, imageGr)
         }
     }
 
-    // Do one iteration, at most, just to pop exactly one group out of
-    // the buffer if we have anything.
-    //
-    // We use `fg.currentGroup` rather than `fg.currentGroupKey`, directly,
-    // because `flushCurrentGroup()` will always leave at least one item in
-    // `fg.currentGroupKey`.
-    for cameraModel, _ := range fg.currentGroup {
-        currentGroupKey := fg.currentGroupKey[cameraModel]
+    if fg.bufferedGroups.haveAnyCompleteGroups() != "" {
+        timeKey, nearestCityKey, cameraModel, images := fg.bufferedGroups.popFirstCompleteGroup()
 
-        finishedGroupKey, finishedGroup, err = fg.flushCurrentGroup(currentGroupKey)
-        log.PanicIf(err)
+        gk := GroupKey{
+            TimeKey:        timeKey,
+            NearestCityKey: nearestCityKey,
+            CameraModel:    cameraModel,
+        }
 
-        // TODO(dustin): !! flushCurrentGroup() can return `nil` for `finishedGroup`. Do we need to check/assert that, here?
+        return gk, images, nil
+    }
 
-        return finishedGroupKey, finishedGroup, nil
+    // If we get here, we're out of data. Is there data in the buffer?
+
+    if fg.bufferedGroups.haveAnyPartialGroups() != "" {
+        timeKey, nearestCityKey, cameraModel, images := fg.bufferedGroups.popFirstPartialGroup()
+
+        gk := GroupKey{
+            TimeKey:        timeKey,
+            NearestCityKey: nearestCityKey,
+            CameraModel:    cameraModel,
+        }
+
+        return gk, images, nil
+    }
+
+    // This should never happen.
+    if fg.currentImagePosition < len(imageIndexTs) {
+        log.Panicf("no data in buffer but we still appear to have data in the data-source")
     }
 
     return GroupKey{}, nil, ErrNoMoreGroups

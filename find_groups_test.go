@@ -53,7 +53,8 @@ func TestFindGroups_AddUnassigned(t *testing.T) {
     }
 
     ur := unassignedRecords[0]
-    if *ur.Geographic != *gr {
+
+    if ur.Geographic.Equal(gr) == false {
         t.Fatalf("Geographic record not stored correctly.")
     } else if ur.Reason != reason {
         t.Fatalf("Reason not stored correctly.")
