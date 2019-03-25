@@ -198,7 +198,6 @@ func (bg *bufferedGroup) pushImage(nearestCityKey string, gr *geoindex.Geographi
         // city.
         if len_ > 2 && bg.images[len_-2].nearestCityKey != nearestCityKey {
             for _, bi := range bg.images[index+1:] {
-                fmt.Printf("SMOOTHING: %s [%s]->[%s]\n", bi.gr, bi.nearestCityKey, nearestCityKey)
                 bi.nearestCityKey = nearestCityKey
             }
         }
