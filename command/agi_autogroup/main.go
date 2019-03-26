@@ -78,8 +78,7 @@ type indexParameters struct {
 }
 
 type sourceCatalogParameters struct {
-    SourceCatalogPath string `long:"source-catalog-path" description:"Write a catalog to the given path using the source images"`
-    NoEmbedImages     bool   `long:"no-embed-images" description:"By default thumbnails are embedded directly into the catalog. Use the source image directly, instead."`
+    NoEmbedImages bool `long:"no-embed-images" description:"By default thumbnails are embedded directly into the catalog. Use the source image directly, instead."`
 }
 
 type groupParameters struct {
@@ -185,7 +184,7 @@ func (sl sortableLinks) Less(i, j int) bool {
 // writeDestHtmlCatalog will write an HTML catalog to the disk. Note that the
 // catalog is organized by original groups whereas the the physical folders on
 // the disk may or may not be combined based on the folder-name template.
-func writeDestHtmlCatalog(groupArguments groupParameters, fg *geoautogroup.FindGroups, collected []map[string]interface{}, copyPath string, noEmbedImages bool) (err error) {
+func writeDestHtmlCatalog(groupArguments groupParameters, fg *geoautogroup.FindGroups, collected []map[string]interface{}, copyPath string, noEmbedImages bool, fileMappings map[string]imageFileMapping) (err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -194,7 +193,7 @@ func writeDestHtmlCatalog(groupArguments groupParameters, fg *geoautogroup.FindG
 
     // TODO(dustin): !! Finish implementing `noEmbedImages`.
 
-    sc := sitebuilder.NewSiteContext(groupArguments.CopyPath)
+    sc := sitebuilder.NewSiteContext(copyPath)
     md := markdowndialect.NewMarkdownDialect()
 
     sb := sitebuilder.NewSiteBuilder(destHtmlCatalogDefaultName, md, sc)
@@ -217,7 +216,7 @@ func writeDestHtmlCatalog(groupArguments groupParameters, fg *geoautogroup.FindG
 
         navbarTitle := fmt.Sprintf("%s (%d)", childPageTitle, len(groupedItems))
 
-        childPageId, err := writeDestHtmlCatalogGroup(rootNode, groupKey, cityRecord, childPageTitle, groupedItems)
+        childPageId, err := writeDestHtmlCatalogGroup(rootNode, groupKey, cityRecord, childPageTitle, groupedItems, fileMappings)
         log.PanicIf(err)
 
         catalogLw := sitebuilder.NewLinkWidget(navbarTitle, sitebuilder.NewSitePageLocalResourceLocator(sb, childPageId))
@@ -256,7 +255,7 @@ func writeDestHtmlCatalog(groupArguments groupParameters, fg *geoautogroup.FindG
     return nil
 }
 
-func writeDestHtmlCatalogGroup(rootNode *sitebuilder.SiteNode, groupKey geoautogroup.GroupKey, cr geoattractor.CityRecord, pageTitle string, groupedItems []*geoindex.GeographicRecord) (childPageId string, err error) {
+func writeDestHtmlCatalogGroup(rootNode *sitebuilder.SiteNode, groupKey geoautogroup.GroupKey, cr geoattractor.CityRecord, pageTitle string, groupedItems []*geoindex.GeographicRecord, fileMappings map[string]imageFileMapping) (childPageId string, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -274,10 +273,14 @@ func writeDestHtmlCatalogGroup(rootNode *sitebuilder.SiteNode, groupKey geoautog
     // Add images.
 
     for _, gr := range groupedItems {
-        // TODO(dustin): !! We need to use a relative file-path.
-        lrl := sitebuilder.NewLocalResourceLocator(gr.Filepath)
+        imageLocations, found := fileMappings[gr.Filepath]
+        if found == false {
+            log.Panicf("Could not find copied file-path for [%s] out of (%d) mappings.", gr.Filepath, len(fileMappings))
+        }
 
-        filename := path.Base(gr.Filepath)
+        lrl := sitebuilder.NewLocalResourceLocator(imageLocations.RelativeFilepathFromCatalog)
+
+        filename := path.Base(imageLocations.RelativeFilepathFromCatalog)
 
         // TODO(dustin): !! Insert descriptions for each image.
         // TODO(dustin): !! We should also take a nil-able link that we will link the image against if present.
@@ -288,6 +291,11 @@ func writeDestHtmlCatalogGroup(rootNode *sitebuilder.SiteNode, groupKey geoautog
     }
 
     return childPageId, nil
+}
+
+type imageFileMapping struct {
+    OutputFilepath              string
+    RelativeFilepathFromCatalog string
 }
 
 func handleGroup(groupArguments groupParameters) {
@@ -316,6 +324,7 @@ func handleGroup(groupArguments groupParameters) {
     // `String()`).
     binnedImages := make(map[string][]*geoindex.GeographicRecord)
 
+    fileMappings := make(map[string]imageFileMapping)
     for i := 0; ; i++ {
         finishedGroupKey, finishedGroup, err := fg.FindNext()
         if err != nil {
@@ -326,6 +335,11 @@ func handleGroup(groupArguments groupParameters) {
             log.Panic(err)
         }
 
+        if groupArguments.CopyPath != "" {
+            err := copyFiles(fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate, printProgressOutput, binnedImages, fileMappings)
+            log.PanicIf(err)
+        }
+
         if collected != nil {
             item := map[string]interface{}{
                 "group_key": finishedGroupKey,
@@ -333,11 +347,6 @@ func handleGroup(groupArguments groupParameters) {
             }
 
             collected = append(collected, item)
-        }
-
-        if groupArguments.CopyPath != "" {
-            err := copyFiles(fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate, printProgressOutput, binnedImages)
-            log.PanicIf(err)
         }
 
         // TODO(dustin): Just to get rid of incidental pictures from the journey.
@@ -364,16 +373,6 @@ func handleGroup(groupArguments groupParameters) {
     }
 
     if collected != nil {
-        // TODO(dustin): !! Finish.
-        //
-        // // Only write source catalog if we were given a path to write it to (we
-        // // might be reading from multiple paths and we also do not want to
-        // // change the input paths without permission).
-        // if groupArguments.SourceCatalogPath != "" {
-        //     err := writeSourceHtmlCatalog(collected, groupArguments.SourceCatalogPath, groupArguments.NoEmbedImages)
-        //     log.PanicIf(err)
-        // }
-
         // Automatically write a destination catalog if we're doing a copy.
         if groupArguments.CopyPath != "" {
             destCatalogPath := path.Join(groupArguments.CopyPath, "catalog", sessionTimestampPhrase)
@@ -381,7 +380,7 @@ func handleGroup(groupArguments groupParameters) {
             fmt.Printf("\n")
             fmt.Printf("Writing catalog to: %s\n", destCatalogPath)
 
-            err := writeDestHtmlCatalog(groupArguments, fg, collected, destCatalogPath, groupArguments.NoEmbedImages)
+            err := writeDestHtmlCatalog(groupArguments, fg, collected, destCatalogPath, groupArguments.NoEmbedImages, fileMappings)
             log.PanicIf(err)
         }
     }
@@ -487,7 +486,7 @@ func handleGroup(groupArguments groupParameters) {
     }
 }
 
-func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []*geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printProgressOutput bool, binnedImages map[string][]*geoindex.GeographicRecord) (err error) {
+func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []*geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printProgressOutput bool, binnedImages map[string][]*geoindex.GeographicRecord, fileMappings map[string]imageFileMapping) (err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -545,12 +544,32 @@ func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupK
     log.PanicIf(err)
 
     tick := func(gr *geoindex.GeographicRecord) {
+        defer func() {
+            if state := recover(); state != nil {
+                err := log.Wrap(state.(error))
+                log.PanicIf(err)
+            }
+        }()
+
         if list, found := binnedImages[folderName]; found == true {
             list = append(list, gr)
         } else {
             binnedImages[folderName] = []*geoindex.GeographicRecord{
                 gr,
             }
+        }
+
+        filename := path.Base(gr.Filepath)
+
+        finalFilename, err := copyFile(destPath, filename, gr, fileMappings)
+        log.PanicIf(err)
+
+        destFilepath := path.Join(destPath, finalFilename)
+        relFilepathFromCatalog := path.Join("..", "..", folderName, finalFilename)
+
+        fileMappings[gr.Filepath] = imageFileMapping{
+            OutputFilepath:              destFilepath,
+            RelativeFilepathFromCatalog: relFilepathFromCatalog,
         }
     }
 
@@ -579,35 +598,28 @@ func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupK
 
             tick(gr)
 
-            err := copyFile(destPath, gr)
-            log.PanicIf(err)
-
             return false
         })
     } else {
         for _, gr := range finishedGroup {
             tick(gr)
-
-            err := copyFile(destPath, gr)
-            log.PanicIf(err)
         }
     }
 
     return nil
 }
 
-func copyFile(destPath string, gr *geoindex.GeographicRecord) (err error) {
+func copyFile(destPath, filename string, gr *geoindex.GeographicRecord, fileMappings map[string]imageFileMapping) (finalFilename string, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
         }
     }()
 
-    filename := path.Base(gr.Filepath)
-    destFilepath := path.Join(destPath, filename)
+    destExt := path.Ext(filename)
+    leftSide := filename[:len(filename)-len(destExt)]
 
-    destExt := path.Ext(destFilepath)
-    leftSide := destFilepath[:len(destFilepath)-len(destExt)]
+    destFilepath := path.Join(destPath, filename)
 
     // Manage naming collisions.
 
@@ -631,10 +643,11 @@ func copyFile(destPath string, gr *geoindex.GeographicRecord) (err error) {
         // It's identical. Don't do anything.
         if bytes.Compare(fromImageHash, ToImageHash) == 0 {
             mainLogger.Debugf(nil, "Image already exists: [%s] => [%s]", gr.Filepath, destFilepath)
-            return nil
+            return filename, nil
         }
 
-        destFilepath = fmt.Sprintf("%s (%d)%s", leftSide, i+1, destExt)
+        filename = fmt.Sprintf("%s (%d)%s", leftSide, i+1, destExt)
+        destFilepath = path.Join(destPath, filename)
     }
 
     fromFile, err := os.Open(gr.Filepath)
@@ -649,7 +662,7 @@ func copyFile(destPath string, gr *geoindex.GeographicRecord) (err error) {
     fromFile.Close()
     toFile.Close()
 
-    return nil
+    return filename, nil
 }
 
 func getFilepathSha1(filepath string) []byte {
