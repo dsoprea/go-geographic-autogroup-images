@@ -2,6 +2,7 @@ package geoautogroup
 
 import (
     "fmt"
+    "path"
     "time"
 
     "github.com/dsoprea/go-logging"
@@ -62,7 +63,7 @@ func (bg *bufferedGroup) dump(printDetail bool) {
 // haveCompleteGroup will return true if we have more than one time-key in the
 // buffer. This is guaranteed to indicate a complete group if all of our images
 // are in chronological order, which is implicit given our time-series in-memory
-// storage.
+// storage. This is a very cheap call.
 func (bg *bufferedGroup) haveCompleteGroup() bool {
     if len(bg.images) == 0 {
         log.Panicf("a buffered group should never be empty")
@@ -72,7 +73,7 @@ func (bg *bufferedGroup) haveCompleteGroup() bool {
 }
 
 // havePartialGroup will return true if the group is non-empty but the first
-// and last image have the same time-key.
+// and last image have the same time-key. This is a very cheap call.
 func (bg *bufferedGroup) havePartialGroup() bool {
     if len(bg.images) == 0 {
         log.Panicf("a buffered group should never be empty")
@@ -81,10 +82,17 @@ func (bg *bufferedGroup) havePartialGroup() bool {
     return bg.firstTimeKey == bg.lastTimeKey
 }
 
+// popCompleteGroup is called with the guarantee that we have at least one
+// complete group at the head of the buffer, but we need to work our way back
+// from the top in order to figure out how many images are actually part of
+// that first group. This is where the grouping semantics live.
 func (bg *bufferedGroup) popCompleteGroup() (nearestCityKey string, group []*geoindex.GeographicRecord) {
     if bg.haveCompleteGroup() == false {
         log.Panicf("can not return complete group if we do not have one")
     }
+
+    // Iterate through the images at the top of the buffer. Stop when the city
+    // or the time-key changes.
 
     group = make([]*geoindex.GeographicRecord, 0)
     firstNearestCityKey := ""
@@ -129,6 +137,10 @@ func (bg *bufferedGroup) popCompleteGroup() (nearestCityKey string, group []*geo
     return firstNearestCityKey, group
 }
 
+// popPartialGroup returns the tail data from the buffer. These images will all
+// be a part of the same group and is partial by the virtue of not being bounded
+// but a group following it. This is used as the final step to flush the buffers
+// before terminating the search.
 func (bg *bufferedGroup) popPartialGroup() (nearestCityKey string, group []*geoindex.GeographicRecord) {
     if bg.haveCompleteGroup() == true {
         log.Panicf("can not return partial group if at least one complete group is available")
@@ -165,6 +177,10 @@ func (bg *bufferedGroup) isEmpty() bool {
     return len(bg.images) == 0 || bg.firstTimeKey.IsZero()
 }
 
+// Push an image into the buffer. Aside from some jitter correction having to do
+// with the city this image is associated with compared to the adjacent images,
+// this is very straightforward. This is where we might also massage the image
+// data in order to facilitate group.
 func (bg *bufferedGroup) pushImage(nearestCityKey string, gr *geoindex.GeographicRecord) {
     // If the current image and the last-added image both have the same
     // location, curry that time-key to this image (since they are the same
@@ -172,9 +188,14 @@ func (bg *bufferedGroup) pushImage(nearestCityKey string, gr *geoindex.Geographi
     // grouped together).
     lastBi := bg.images[len(bg.images)-1]
 
+    // Before we push our current image to the back of the buffer, force the
+    // time-key of the current image to be inherited from the current-last image
+    // (soon to be an adjacent images) if it's the same city.
+
     var effectiveTimekey time.Time
     if lastBi.nearestCityKey == nearestCityKey {
         effectiveTimekey = bg.lastTimeKey
+        gr.AddComment(fmt.Sprintf("Inheriting time-key [%s] of previous record with same city [%s]: [%s] (%.6f, %.6f)", effectiveTimekey, nearestCityKey, path.Base(lastBi.gr.Filepath), lastBi.gr.Latitude, lastBi.gr.Longitude))
     }
 
     // Now, append.
@@ -196,9 +217,15 @@ func (bg *bufferedGroup) pushImage(nearestCityKey string, gr *geoindex.Geographi
         // city than us. Otherwise, we'll just update and reupdate all of the
         // adjacent images that we add that we already know to have the same
         // city.
-        if len_ > 2 && bg.images[len_-2].nearestCityKey != nearestCityKey {
-            for _, bi := range bg.images[index+1:] {
-                bi.nearestCityKey = nearestCityKey
+        if len_ > 2 {
+            previousBi := bg.images[len_-2]
+            if previousBi.nearestCityKey != nearestCityKey {
+                for _, bi := range bg.images[index+1:] {
+                    if bi.nearestCityKey != nearestCityKey {
+                        bi.gr.AddComment(fmt.Sprintf("Smoothed from city [%s] to city [%s].", bi.nearestCityKey, nearestCityKey))
+                        bi.nearestCityKey = nearestCityKey
+                    }
+                }
             }
         }
 

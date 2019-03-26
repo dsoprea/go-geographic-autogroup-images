@@ -393,7 +393,7 @@ func (fg *FindGroups) getCurrentPositionImages() (outputRecords []currentImageRe
 
             cell := s2.CellID(locationGr.S2CellId)
 
-            comment := fmt.Sprintf("Updated geographic from location with filename [%s], timestamp [%s], and cell [%s]", path.Base(locationGr.Filepath), locationGr.Timestamp.Format(time.RFC3339), cell.ToToken())
+            comment := fmt.Sprintf("Updated geographic info from location record with filename [%s], timestamp [%s], and cell [%s]", path.Base(locationGr.Filepath), locationGr.Timestamp.Format(time.RFC3339), cell.ToToken())
             imageGr.AddComment(comment)
             imageGr.AddRelated(locationGr, GeographicRelationshipSourceLocationRecord)
         }

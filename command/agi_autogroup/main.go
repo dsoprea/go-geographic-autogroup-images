@@ -94,6 +94,7 @@ type groupParameters struct {
     CopyPath                  string `long:"copy-into-path" description:"Copy grouped images into this path."`
     ImageOutputPathTemplate   string `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}}-{{.day_number}} {{.location}}{{.path_sep}}{{.camera_model}}/{{.hour}}.{{.minute}}"`
     NoPrintProgressOutput     bool   `long:"no-dots" description:"Don't print dot progress output if copying"`
+    NoHashChecksOnExisting    bool   `long:"no-hash-checks" description:"If the file already exists in copy-path skip without calculating hash"`
 
     sourceCatalogParameters
 }
@@ -336,7 +337,7 @@ func handleGroup(groupArguments groupParameters) {
         }
 
         if groupArguments.CopyPath != "" {
-            err := copyFiles(fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate, printProgressOutput, binnedImages, fileMappings)
+            err := copyFiles(groupArguments, fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate, printProgressOutput, binnedImages, fileMappings)
             log.PanicIf(err)
         }
 
@@ -486,7 +487,7 @@ func handleGroup(groupArguments groupParameters) {
     }
 }
 
-func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []*geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printProgressOutput bool, binnedImages map[string][]*geoindex.GeographicRecord, fileMappings map[string]imageFileMapping) (err error) {
+func copyFiles(groupArguments groupParameters, fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []*geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printProgressOutput bool, binnedImages map[string][]*geoindex.GeographicRecord, fileMappings map[string]imageFileMapping) (err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -561,7 +562,7 @@ func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupK
 
         filename := path.Base(gr.Filepath)
 
-        finalFilename, err := copyFile(destPath, filename, gr, fileMappings)
+        finalFilename, err := copyFile(groupArguments, destPath, filename, gr, fileMappings)
         log.PanicIf(err)
 
         destFilepath := path.Join(destPath, finalFilename)
@@ -609,7 +610,7 @@ func copyFiles(fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupK
     return nil
 }
 
-func copyFile(destPath, filename string, gr *geoindex.GeographicRecord, fileMappings map[string]imageFileMapping) (finalFilename string, err error) {
+func copyFile(groupArguments groupParameters, destPath, filename string, gr *geoindex.GeographicRecord, fileMappings map[string]imageFileMapping) (finalFilename string, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -633,6 +634,11 @@ func copyFile(destPath, filename string, gr *geoindex.GeographicRecord, fileMapp
             log.Panic(err)
         } else {
             f.Close()
+        }
+
+        // An optimization.
+        if groupArguments.NoHashChecksOnExisting == true {
+            return filename, nil
         }
 
         // File already exists.
