@@ -32,7 +32,7 @@ func GetCityIndex(countriesFilepath, citiesFilepath string) (ci *geoattractorind
     return ci, nil
 }
 
-func GetTimeIndex(paths []string) (ti *geoindex.TimeIndex, err error) {
+func GetTimeIndex(paths []string, imageTimestampSkew time.Duration) (ti *geoindex.TimeIndex, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -43,7 +43,7 @@ func GetTimeIndex(paths []string) (ti *geoindex.TimeIndex, err error) {
     ti = geoindex.NewTimeIndex()
     gc := geoindex.NewGeographicCollector(ti, nil)
 
-    err = geoindex.RegisterImageFileProcessors(gc)
+    err = geoindex.RegisterImageFileProcessors(gc, imageTimestampSkew)
     log.PanicIf(err)
 
     err = geoindex.RegisterDataFileProcessors(gc)
