@@ -16,6 +16,14 @@ type bufferedImage struct {
     nearestCityKey   string
 }
 
+func (bi *bufferedImage) LocationTimekey() string {
+    if bi.effectiveTimekey.IsZero() == true {
+        log.Panicf("can not produce location-timekey if effective-timekey is zeroed: %v", bi)
+    }
+
+    return fmt.Sprintf("%s,%d", bi.nearestCityKey, bi.effectiveTimekey.Unix())
+}
+
 func newBufferedImage(nearestCityKey string, gr *geoindex.GeographicRecord, effectiveTimekey time.Time) *bufferedImage {
     if effectiveTimekey.IsZero() == true {
         effectiveTimekey = getGeographicRecordTimeKey(gr)
@@ -203,35 +211,62 @@ func (bg *bufferedGroup) pushImage(nearestCityKey string, gr *geoindex.Geographi
     bi := newBufferedImage(nearestCityKey, gr, effectiveTimekey)
 
     bg.images = append(bg.images, bi)
-    bg.lastTimeKey = bi.effectiveTimekey
+    currentTimekey := bi.effectiveTimekey
+
+    // Set this before we return in preparation for the next cycle.
+    bg.lastTimeKey = currentTimekey
+
+    // This uniquely identifies the current visit to the city. This will help
+    // us smooth aberrations in the middle.
+    locationTimekey := bi.LocationTimekey()
 
     len_ := len(bg.images)
 
     // If our city has already appeared within the current time interval, smooth
-    // all of the cities of the images between then and now to be the same city.
-    // This could easily be caused by just turning around on a walk and/or
-    // otherwise backtracking and entering another city near the pivot point
-    // within the resolution of the time-key interval.
-    if index, found := bg.locationIndex[nearestCityKey]; found == true {
-        // Only update if the item before the item we just added is a different
-        // city than us. Otherwise, we'll just update and reupdate all of the
-        // adjacent images that we add that we already know to have the same
-        // city.
-        if len_ > 2 {
-            previousBi := bg.images[len_-2]
-            if previousBi.nearestCityKey != nearestCityKey {
-                for _, bi := range bg.images[index+1:] {
-                    if bi.nearestCityKey != nearestCityKey {
-                        bi.gr.AddComment(fmt.Sprintf("Smoothed from city [%s] to city [%s].", bi.nearestCityKey, nearestCityKey))
-                        bi.nearestCityKey = nearestCityKey
-                    }
-                }
-            }
+    // all of the cities of the images between then and now (which is the last
+    // item in the slice) to be the same city. This could easily be caused by
+    // just turning around on a walk and/or otherwise backtracking and entering
+    // another city near the pivot point within the resolution of the time-key
+    // interval.
+    if index, found := bg.locationIndex[locationTimekey]; found == true && len_ > 2 {
+        firstEncounteredBi := bg.images[index]
+
+        // Sanity check.
+        // TODO(dustin): !! Just while debugging.
+        if firstEncounteredBi.nearestCityKey != nearestCityKey || firstEncounteredBi.effectiveTimekey != currentTimekey {
+            log.Panicf("first encountered index of location-timekey was not recorded right: expected [%s] [%v] rather than [%s] [%v]", nearestCityKey, currentTimekey, firstEncounteredBi.nearestCityKey, firstEncounteredBi.effectiveTimekey)
         }
 
-        bg.updateLocationIndex()
-    } else {
-        bg.locationIndex[nearestCityKey] = len(bg.images) - 1
+        // Only update if the item before the item we just added is a different
+        // city (but still within the same time-key of our new image. By.
+        // Otherwise, we'll just update and reupdate all of the adjacent images
+        // that we add that we already know to have the same city.
+        previousBi := bg.images[len_-2]
+        if previousBi.nearestCityKey != nearestCityKey && previousBi.effectiveTimekey == currentTimekey {
+            start_index := index + 1
+            n := len(bg.images) - start_index
+
+            for i, bi := range bg.images[start_index:] {
+                // Sanity check.
+                // TODO(dustin): !! Just while debugging.
+                if bi.effectiveTimekey != currentTimekey {
+                    log.Panicf("current BI during smoothing is no longer the same time-key: [%v] != [%s]", bi.effectiveTimekey, currentTimekey)
+                }
+
+                // The amount of time elapsed between this image and the first
+                // image we encountered at the same city and time-key.
+                timeSinceAberration := bi.gr.Timestamp.Sub(firstEncounteredBi.gr.Timestamp)
+
+                if bi.nearestCityKey != nearestCityKey {
+                    bi.gr.AddComment(fmt.Sprintf("Smoothed image <time-key [%v] timestamp [%v] city [%s] file [%s]> to city [%s] (from just-pushed image <time-key [%v] timestamp [%v] city [%s] file [%s]>). TIME-BETWEEN=[%s] STEP=(%d/%d)", bi.effectiveTimekey, bi.gr.Timestamp, bi.nearestCityKey, path.Base(bi.gr.Filepath), nearestCityKey, currentTimekey, gr.Timestamp, nearestCityKey, path.Base(gr.Filepath), timeSinceAberration, i+1, n))
+                    bi.nearestCityKey = nearestCityKey
+                }
+            }
+
+            bg.updateLocationIndex()
+        }
+    } else if found == false {
+        bg.locationIndex[locationTimekey] = len(bg.images) - 1
     }
 }
 
@@ -242,7 +277,8 @@ func (bg *bufferedGroup) updateLocationIndex() {
     bg.locationIndex = make(map[string]int)
     for i, bi := range bg.images {
         if _, found := bg.locationIndex[bi.nearestCityKey]; found == false {
-            bg.locationIndex[bi.nearestCityKey] = i
+            locationTimekey := bi.LocationTimekey()
+            bg.locationIndex[locationTimekey] = i
         }
     }
 }
