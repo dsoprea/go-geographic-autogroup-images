@@ -406,7 +406,7 @@ func (fg *FindGroups) getCurrentPositionImages() (outputRecords []currentImageRe
         // First, find a city to associate this location with.
 
         // TODO(dustin): !! We already have a cell-ID in `imageGr`. Use that directly rather than forcing downstream recalculations of it by not passing it?
-        sourceName, _, cr, err := fg.cityIndex.Nearest(imageGr.Latitude, imageGr.Longitude)
+        sourceName, _, cr, err := fg.cityIndex.Nearest(imageGr.Latitude, imageGr.Longitude, false)
 
         if err != nil {
             if log.Is(err, geoattractorindex.ErrNoNearestCity) == true {
@@ -532,4 +532,8 @@ func (fg *FindGroups) FindNext() (finishedGroupKey GroupKey, finishedGroup []*ge
     }
 
     return GroupKey{}, nil, ErrNoMoreGroups
+}
+
+func (fg *FindGroups) UrbanCentersEncountered() map[string]geoattractor.CityRecord {
+    return fg.cityIndex.UrbanCentersEncountered()
 }

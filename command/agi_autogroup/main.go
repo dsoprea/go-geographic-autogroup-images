@@ -25,6 +25,7 @@ import (
     "github.com/twpayne/go-kml"
 
     "github.com/dsoprea/go-geographic-attractor"
+    "github.com/dsoprea/go-geographic-attractor/index"
     "github.com/dsoprea/go-geographic-autogroup-images"
     "github.com/dsoprea/go-geographic-index"
 )
@@ -110,7 +111,7 @@ var (
     rootArguments = new(subcommands)
 )
 
-func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups) {
+func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups, ci *geoattractorindex.CityIndex) {
     defer func() {
         if state := recover(); state != nil {
             err := log.Wrap(state.(error))
@@ -120,10 +121,6 @@ func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups)
 
     ci, err := geoautogroup.GetCityIndex(groupArguments.attractorParameters.CountriesFilepath, groupArguments.attractorParameters.CitiesFilepath)
     log.PanicIf(err)
-
-    if groupArguments.PrintStats == true {
-        fmt.Printf("Attractor index stats: %s\n", ci.Stats())
-    }
 
     locationIndex, err := geoautogroup.GetTimeIndex(groupArguments.indexParameters.DataPaths, 0)
     log.PanicIf(err)
@@ -160,7 +157,7 @@ func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups)
         fg.SetLocationMatchStrategy(geoautogroup.LocationMatchStrategySparseData)
     }
 
-    return fg
+    return fg, ci
 }
 
 type catalogItem struct {
@@ -323,7 +320,7 @@ func handleGroup(groupArguments groupParameters) {
 
     sessionTimestampPhrase := geoautogroup.GetCondensedDatetime(time.Now())
 
-    fg := getFindGroups(groupArguments)
+    fg, ci := getFindGroups(groupArguments)
 
     kmlTallies := make(map[geoattractor.CityRecord][2]int)
     collected := make([]map[string]interface{}, 0)
@@ -384,6 +381,22 @@ func handleGroup(groupArguments groupParameters) {
                 1,
                 len(finishedGroup),
             }
+        }
+    }
+
+    if groupArguments.PrintStats == true {
+        fmt.Printf("\n")
+        fmt.Printf("Attractor index stats: %s\n", ci.Stats())
+    }
+
+    urbanCenters := fg.UrbanCentersEncountered()
+    if len(urbanCenters) > 0 {
+        fmt.Printf("\n")
+        fmt.Printf("Urban Areas Visited\n")
+        fmt.Printf("===================\n")
+
+        for _, cr := range urbanCenters {
+            fmt.Printf("%8s  %s  (%.6f,%.6f)\n", cr.Id, cr.CityAndProvinceState(), cr.Latitude, cr.Longitude)
         }
     }
 
