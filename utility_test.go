@@ -16,7 +16,7 @@ func TestGetCityIndex(t *testing.T) {
 
     sydneyCoordinates := []float64{-33.86785, 151.20732}
 
-    _, _, cr, err := ci.Nearest(sydneyCoordinates[0], sydneyCoordinates[1])
+    _, _, cr, err := ci.Nearest(sydneyCoordinates[0], sydneyCoordinates[1], false)
     log.PanicIf(err)
 
     if cr.Id != "2147714" {
