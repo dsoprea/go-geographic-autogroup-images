@@ -30,7 +30,7 @@ var (
 
 const (
     copyInfoFilenamePrefix     = ".autogroup"
-    largestGroupSizeMinimum    = 50
+    largestGroupMinimumSize    = 50
     destHtmlCatalogDefaultName = "Grouped Image Catalog"
 
     catalogImageWidth  = 600
@@ -171,6 +171,24 @@ func handleGroup(groupArguments groupParameters) {
 
     fg, ci := getFindGroups(groupArguments)
 
+    // Run the grouping operation.
+
+    gr := geoautogroup.NewGroupsReducer(fg)
+    collectedGroups, merged := gr.Reduce()
+
+    if merged > 0 {
+        keptCount := 0
+        for _, groups := range collectedGroups {
+            keptCount += len(groups)
+        }
+
+        fmt.Printf("Coalesced (%d) trivial groups. There are (%d) final groups.\n", merged, keptCount)
+        fmt.Printf("\n")
+    }
+
+    // Merge smaller cities with smaller datasets into the groups for larger
+    // cities.
+
     kmlTallies := make(map[geoattractor.CityRecord][2]int)
     collected := make([]map[string]interface{}, 0)
 
@@ -186,50 +204,42 @@ func handleGroup(groupArguments groupParameters) {
     binnedImages := make(map[string][]*geoindex.GeographicRecord)
 
     fileMappings := make(map[string]imageFileMapping)
-    for i := 0; ; i++ {
-        finishedGroupKey, finishedGroup, err := fg.FindNext()
-        if err != nil {
-            if err == geoautogroup.ErrNoMoreGroups {
-                break
+    i := 0
+    for _, groups := range collectedGroups {
+        for _, cg := range groups {
+            finishedGroupKey := cg.GroupKey
+            finishedGroup := cg.Records
+
+            if groupArguments.CopyPath != "" {
+                err := copyFiles(groupArguments, fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate, printProgressOutput, binnedImages, fileMappings)
+                log.PanicIf(err)
             }
 
-            log.Panic(err)
-        }
+            if collected != nil {
+                item := map[string]interface{}{
+                    "group_key": finishedGroupKey,
+                    "records":   finishedGroup,
+                }
 
-        if groupArguments.CopyPath != "" {
-            err := copyFiles(groupArguments, fg, finishedGroupKey, finishedGroup, groupArguments.CopyPath, imageOutputPathTemplate, printProgressOutput, binnedImages, fileMappings)
-            log.PanicIf(err)
-        }
-
-        if collected != nil {
-            item := map[string]interface{}{
-                "group_key": finishedGroupKey,
-                "records":   finishedGroup,
+                collected = append(collected, item)
             }
 
-            collected = append(collected, item)
-        }
+            nearestCityIndex := fg.NearestCityIndex()
+            cityRecord := nearestCityIndex[finishedGroupKey.NearestCityKey]
 
-        // TODO(dustin): Just to get rid of incidental pictures from the journey.
-        if len(finishedGroup) < groupArguments.KmlMinimumGroupImageCount {
-            continue
-        }
-
-        // TODO(dustin): !! Why are we not seeing tallies?
-
-        nearestCityIndex := fg.NearestCityIndex()
-        cityRecord := nearestCityIndex[finishedGroupKey.NearestCityKey]
-
-        if existing, found := kmlTallies[cityRecord]; found == true {
-            kmlTallies[cityRecord] = [2]int{
-                existing[0] + 1,
-                existing[1] + len(finishedGroup),
+            if existing, found := kmlTallies[cityRecord]; found == true {
+                kmlTallies[cityRecord] = [2]int{
+                    existing[0] + 1,
+                    existing[1] + len(finishedGroup),
+                }
+            } else {
+                kmlTallies[cityRecord] = [2]int{
+                    1,
+                    len(finishedGroup),
+                }
             }
-        } else {
-            kmlTallies[cityRecord] = [2]int{
-                1,
-                len(finishedGroup),
-            }
+
+            i++
         }
     }
 
@@ -244,7 +254,17 @@ func handleGroup(groupArguments groupParameters) {
         fmt.Printf("Urban Areas Visited\n")
         fmt.Printf("===================\n")
 
-        for _, cr := range urbanCenters {
+        ids := make(sort.StringSlice, len(urbanCenters))
+        i := 0
+        for id, _ := range urbanCenters {
+            ids[i] = id
+            i++
+        }
+
+        ids.Sort()
+
+        for _, id := range ids {
+            cr := urbanCenters[id]
             fmt.Printf("%8s  %s  (%.6f,%.6f)\n", cr.Id, cr.CityAndProvinceState(), cr.Latitude, cr.Longitude)
         }
     }
@@ -269,7 +289,7 @@ func handleGroup(groupArguments groupParameters) {
         tallies := make(Tallies, 0)
         for folderName, entries := range binnedImages {
             count := len(entries)
-            if count < largestGroupSizeMinimum {
+            if count < largestGroupMinimumSize {
                 continue
             }
 
@@ -295,9 +315,11 @@ func handleGroup(groupArguments groupParameters) {
         }
     }
 
-    // TODO(dustin): !! Make sure that files that returned nil,nil from the image processor in go-geographic-index is logged as unassigned. OTherwise, we'll have no chance of debugging image issues.
+    // TODO(dustin): !! Make sure that files that returned nil,nil from the image processor in go-geographic-index is logged as unassigned. Otherwise, we'll have no chance of debugging image issues.
 
     if groupArguments.JsonFilepath != "" {
+        // Write all of the final data as a JSON structure.
+
         encodedGroups := make([]map[string]interface{}, len(collected))
         for i, groupInfo := range collected {
             groupKey := groupInfo["group_key"].(geoautogroup.GroupKey)
@@ -307,6 +329,8 @@ func handleGroup(groupArguments groupParameters) {
             locationSourceRecords := make(map[string]map[string]interface{})
             for i, gr := range originalRecords {
                 encoded := gr.Encode()
+
+                // Relocate relationships to reduce duplication and clutter.
 
                 encodedRelationships := encoded["relationships"].(map[string][]map[string]interface{})
 
@@ -454,7 +478,7 @@ func writeGroupInfoAsKml(tallies map[geoattractor.CityRecord][2]int, filepath st
         groupPoint := kml.Placemark(
             kml.Name(name),
             kml.Description(description),
-            // kml.StyleURL("#RedPlaces"),
+
             kml.Point(
                 kml.Coordinates(coordinate),
             ),

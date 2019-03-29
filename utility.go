@@ -24,7 +24,7 @@ func GetCityIndex(countriesFilepath, citiesFilepath string) (ci *geoattractorind
     f, err := geoattractorparse.GetCitydataReadCloser(citiesFilepath)
     log.PanicIf(err)
 
-    ci = geoattractorindex.NewCityIndex(MinimumLevelForUrbanCenterAttraction, UrbanCenterMinimumPopulation)
+    ci = geoattractorindex.NewCityIndex(minimumLevelForUrbanCenterAttraction, urbanCenterMinimumPopulation)
 
     err = ci.Load(gp, f, nil)
     log.PanicIf(err)
