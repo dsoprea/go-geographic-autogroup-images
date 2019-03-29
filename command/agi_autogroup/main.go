@@ -195,7 +195,7 @@ func handleGroup(groupArguments groupParameters) {
     // Copy images.
 
     if groupArguments.CopyPath != "" {
-        fmt.Printf("Copying images.\n")
+        fmt.Printf("Copying images:\n")
         fmt.Printf("\n")
     }
 
@@ -366,9 +366,9 @@ func handleGroup(groupArguments groupParameters) {
             }
 
             item := map[string]interface{}{
-                "group_key": groupKey,
-                "records":   updatedRecords,
-                "locations": locationSourceRecords,
+                "group_key":        groupKey,
+                "records":          updatedRecords,
+                "location_sources": locationSourceRecords,
             }
 
             encodedGroups[i] = item
