@@ -1,33 +1,27 @@
 package main
 
 import (
-    "bytes"
     "fmt"
-    "io"
     "os"
     "path"
     "sort"
     "time"
 
-    "crypto/sha1"
     "encoding/json"
     "encoding/xml"
     "io/ioutil"
     "text/template"
 
-    "github.com/dsoprea/go-logging"
-    "github.com/dsoprea/go-static-site-builder"
-    "github.com/dsoprea/go-static-site-builder/markdown"
-    "github.com/dsoprea/go-time-parse"
     "github.com/jessevdk/go-flags"
-    "github.com/sbwhitecap/tqdm"
-    "github.com/sbwhitecap/tqdm/iterators"
     "github.com/twpayne/go-kml"
 
     "github.com/dsoprea/go-geographic-attractor"
     "github.com/dsoprea/go-geographic-attractor/index"
-    "github.com/dsoprea/go-geographic-autogroup-images"
     "github.com/dsoprea/go-geographic-index"
+    "github.com/dsoprea/go-logging"
+    "github.com/dsoprea/go-time-parse"
+
+    "github.com/dsoprea/go-geographic-autogroup-images"
 )
 
 var (
@@ -158,151 +152,6 @@ func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups,
     }
 
     return fg, ci
-}
-
-type catalogItem struct {
-    groupKey   geoautogroup.GroupKey
-    linkWidget sitebuilder.LinkWidget
-}
-
-// sortableLinks is a sortable slice of catalog items. We use it to sort the
-// catalog in a sensible order.
-type sortableLinks []catalogItem
-
-func (sl sortableLinks) Len() int {
-    return len(sl)
-}
-
-func (sl sortableLinks) Swap(i, j int) {
-    sl[i], sl[j] = sl[j], sl[i]
-}
-
-func (sl sortableLinks) Less(i, j int) bool {
-    first, second := sl[i], sl[j]
-
-    if first.groupKey.TimeKey != second.groupKey.TimeKey {
-        return first.groupKey.TimeKey.Before(second.groupKey.TimeKey)
-    }
-
-    // The time matches. Compare the city.
-
-    if first.groupKey.NearestCityKey != second.groupKey.NearestCityKey {
-        return first.groupKey.NearestCityKey < second.groupKey.NearestCityKey
-    }
-
-    return first.groupKey.CameraModel < second.groupKey.CameraModel
-}
-
-// writeDestHtmlCatalog will write an HTML catalog to the disk. Note that the
-// catalog is organized by original groups whereas the the physical folders on
-// the disk may or may not be combined based on the folder-name template.
-func writeDestHtmlCatalog(groupArguments groupParameters, fg *geoautogroup.FindGroups, collected []map[string]interface{}, copyPath string, noEmbedImages bool, fileMappings map[string]imageFileMapping) (err error) {
-    defer func() {
-        if state := recover(); state != nil {
-            err = log.Wrap(state.(error))
-        }
-    }()
-
-    // TODO(dustin): !! Finish implementing `noEmbedImages`.
-
-    sc := sitebuilder.NewSiteContext(copyPath)
-    md := markdowndialect.NewMarkdownDialect()
-
-    sb := sitebuilder.NewSiteBuilder(destHtmlCatalogDefaultName, md, sc)
-
-    // Create content on root page.
-
-    rootNode := sb.Root()
-
-    nearestCityIndex := fg.NearestCityIndex()
-
-    catalogItems := make([]catalogItem, 0)
-    for _, item := range collected {
-        groupKey := item["group_key"].(geoautogroup.GroupKey)
-        groupedItems := item["records"].([]*geoindex.GeographicRecord)
-
-        cityRecord := nearestCityIndex[groupKey.NearestCityKey]
-
-        timePhrase := fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", groupKey.TimeKey.Year(), groupKey.TimeKey.Month(), groupKey.TimeKey.Day(), groupKey.TimeKey.Hour(), groupKey.TimeKey.Minute(), groupKey.TimeKey.Second())
-        childPageTitle := fmt.Sprintf("%s UTC (%s) %s", timePhrase, cityRecord.CityAndProvinceState(), groupKey.CameraModel)
-
-        navbarTitle := fmt.Sprintf("%s (%d)", childPageTitle, len(groupedItems))
-
-        childPageId, err := writeDestHtmlCatalogGroup(rootNode, groupKey, cityRecord, childPageTitle, groupedItems, fileMappings)
-        log.PanicIf(err)
-
-        catalogLw := sitebuilder.NewLinkWidget(navbarTitle, sitebuilder.NewSitePageLocalResourceLocator(sb, childPageId))
-
-        ci := catalogItem{
-            groupKey:   groupKey,
-            linkWidget: catalogLw,
-        }
-
-        catalogItems = append(catalogItems, ci)
-    }
-
-    stl := sortableLinks(catalogItems)
-    sort.Sort(stl)
-
-    catalogLinks := make([]sitebuilder.LinkWidget, len(stl))
-    for i, ci := range stl {
-        catalogLinks[i] = ci.linkWidget
-    }
-
-    rootPb := rootNode.Builder()
-
-    // Add navbar with page links.
-
-    nw := sitebuilder.NewNavbarWidget(catalogLinks)
-
-    // TODO(dustin): !! Replace this with a list of descriptions and the first image.
-    err = rootPb.AddVerticalNavbar(nw, "Groups")
-    log.PanicIf(err)
-
-    // Render and write.
-
-    err = sb.WriteToPath()
-    log.PanicIf(err)
-
-    return nil
-}
-
-func writeDestHtmlCatalogGroup(rootNode *sitebuilder.SiteNode, groupKey geoautogroup.GroupKey, cr geoattractor.CityRecord, pageTitle string, groupedItems []*geoindex.GeographicRecord, fileMappings map[string]imageFileMapping) (childPageId string, err error) {
-    defer func() {
-        if state := recover(); state != nil {
-            err = log.Wrap(state.(error))
-        }
-    }()
-
-    // Add a new page.
-
-    childPageId = groupKey.KeyPhrase()
-    childNode, err := rootNode.AddChildNode(childPageId, pageTitle)
-    log.PanicIf(err)
-
-    childPb := childNode.Builder()
-
-    // Add images.
-
-    for _, gr := range groupedItems {
-        imageLocations, found := fileMappings[gr.Filepath]
-        if found == false {
-            log.Panicf("Could not find copied file-path for [%s] out of (%d) mappings.", gr.Filepath, len(fileMappings))
-        }
-
-        lrl := sitebuilder.NewLocalResourceLocator(imageLocations.RelativeFilepathFromCatalog)
-
-        filename := path.Base(imageLocations.RelativeFilepathFromCatalog)
-
-        // TODO(dustin): !! Insert descriptions for each image.
-        // TODO(dustin): !! We should also take a nil-able link that we will link the image against if present.
-        iw := sitebuilder.NewImageWidget(filename, lrl, catalogImageWidth, catalogImageHeight)
-
-        err = childPb.AddContentImage(iw)
-        log.PanicIf(err)
-    }
-
-    return childPageId, nil
 }
 
 type imageFileMapping struct {
@@ -512,205 +361,6 @@ func handleGroup(groupArguments groupParameters) {
         err := writeGroupInfoAsKml(kmlTallies, groupArguments.KmlFilepath)
         log.PanicIf(err)
     }
-}
-
-func copyFiles(groupArguments groupParameters, fg *geoautogroup.FindGroups, finishedGroupKey geoautogroup.GroupKey, finishedGroup []*geoindex.GeographicRecord, copyRootPath string, imageOutputPathTemplate *template.Template, printProgressOutput bool, binnedImages map[string][]*geoindex.GeographicRecord, fileMappings map[string]imageFileMapping) (err error) {
-    defer func() {
-        if state := recover(); state != nil {
-            err = log.Wrap(state.(error))
-        }
-    }()
-
-    timeKey := finishedGroupKey.TimeKey
-
-    nearestCityIndex := fg.NearestCityIndex()
-    cityRecord := nearestCityIndex[finishedGroupKey.NearestCityKey]
-
-    camera_model := finishedGroupKey.CameraModel
-
-    // This will often happen with screen-catpures and pictures downloaded
-    // from social networks.
-    if camera_model == "" {
-        camera_model = "no_camera_model"
-    }
-
-    cityprovince := cityRecord.CityAndProvinceState()
-
-    location := cityprovince
-
-    // If the city-record doesn't have a usable province-state string (where
-    // `city_and_province_state` equals city), then attach the country name.
-    if location == cityRecord.City {
-        location = fmt.Sprintf("%s, %s", cityRecord.City, cityRecord.Country)
-    }
-
-    replacements := map[string]interface{}{
-        "year":                    timeKey.Year(),
-        "month_number":            fmt.Sprintf("%02d", timeKey.Month()),
-        "month_name":              fmt.Sprintf("%s", timeKey.Month()),
-        "day_number":              fmt.Sprintf("%02d", timeKey.Day()),
-        "hour":                    fmt.Sprintf("%02d", timeKey.Hour()),
-        "minute":                  fmt.Sprintf("%02d", timeKey.Minute()),
-        "second":                  fmt.Sprintf("%02d", timeKey.Second()),
-        "city_and_province_state": cityprovince,
-        "location":                location,
-        "country":                 cityRecord.Country,
-        "record_count":            len(finishedGroup),
-        "camera_model":            camera_model,
-        "path_sep":                string([]byte{os.PathSeparator}),
-    }
-
-    b := new(bytes.Buffer)
-    err = imageOutputPathTemplate.Execute(b, replacements)
-    log.PanicIf(err)
-
-    folderName := b.String()
-
-    destPath := path.Join(copyRootPath, folderName)
-
-    err = os.MkdirAll(destPath, 0755)
-    log.PanicIf(err)
-
-    tick := func(gr *geoindex.GeographicRecord) {
-        defer func() {
-            if state := recover(); state != nil {
-                err := log.Wrap(state.(error))
-                log.PanicIf(err)
-            }
-        }()
-
-        if list, found := binnedImages[folderName]; found == true {
-            binnedImages[folderName] = append(list, gr)
-        } else {
-            binnedImages[folderName] = []*geoindex.GeographicRecord{
-                gr,
-            }
-        }
-
-        filename := path.Base(gr.Filepath)
-
-        finalFilename, err := copyFile(groupArguments, destPath, filename, gr, fileMappings)
-        log.PanicIf(err)
-
-        destFilepath := path.Join(destPath, finalFilename)
-        relFilepathFromCatalog := path.Join("..", "..", folderName, finalFilename)
-
-        fileMappings[gr.Filepath] = imageFileMapping{
-            OutputFilepath:              destFilepath,
-            RelativeFilepathFromCatalog: relFilepathFromCatalog,
-        }
-    }
-
-    if printProgressOutput == true {
-        // Print the progress of copying all images in this group.
-
-        titleTemplateRaw := "{{.year}}-{{.month_number}}-{{.day_number}} {{.hour}}:{{.minute}}:{{.second}}  {{.location}}{{.path_sep}}{{.camera_model}}"
-        titleTemplate := template.Must(template.New("group title template").Parse(titleTemplateRaw))
-
-        b := new(bytes.Buffer)
-        err = titleTemplate.Execute(b, replacements)
-        log.PanicIf(err)
-
-        title := b.String()
-
-        tqdm.With(iterators.Interval(0, len(finishedGroup)), title, func(v interface{}) (brk bool) {
-            defer func() {
-                if state := recover(); state != nil {
-                    err := log.Wrap(state.(error))
-                    log.PanicIf(err)
-                }
-            }()
-
-            i := v.(int)
-            gr := finishedGroup[i]
-
-            tick(gr)
-
-            return false
-        })
-    } else {
-        for _, gr := range finishedGroup {
-            tick(gr)
-        }
-    }
-
-    return nil
-}
-
-func copyFile(groupArguments groupParameters, destPath, filename string, gr *geoindex.GeographicRecord, fileMappings map[string]imageFileMapping) (finalFilename string, err error) {
-    defer func() {
-        if state := recover(); state != nil {
-            err = log.Wrap(state.(error))
-        }
-    }()
-
-    destExt := path.Ext(filename)
-    leftSide := filename[:len(filename)-len(destExt)]
-
-    destFilepath := path.Join(destPath, filename)
-
-    // Manage naming collisions.
-
-    // TODO(dustin): Add test.
-    for i := 1; i < 10; i++ {
-        if f, err := os.Open(destFilepath); err != nil {
-            if os.IsNotExist(err) == true {
-                break
-            }
-
-            log.Panic(err)
-        } else {
-            f.Close()
-        }
-
-        // An optimization.
-        if groupArguments.NoHashChecksOnExisting == true {
-            return filename, nil
-        }
-
-        // File already exists.
-
-        fromImageHash := getFilepathSha1(gr.Filepath)
-        ToImageHash := getFilepathSha1(destFilepath)
-
-        // It's identical. Don't do anything.
-        if bytes.Compare(fromImageHash, ToImageHash) == 0 {
-            mainLogger.Debugf(nil, "Image already exists: [%s] => [%s]", gr.Filepath, destFilepath)
-            return filename, nil
-        }
-
-        filename = fmt.Sprintf("%s (%d)%s", leftSide, i+1, destExt)
-        destFilepath = path.Join(destPath, filename)
-    }
-
-    fromFile, err := os.Open(gr.Filepath)
-    log.PanicIf(err)
-
-    toFile, err := os.Create(destFilepath)
-    log.PanicIf(err)
-
-    _, err = io.Copy(toFile, fromFile)
-    log.PanicIf(err)
-
-    fromFile.Close()
-    toFile.Close()
-
-    return filename, nil
-}
-
-func getFilepathSha1(filepath string) []byte {
-    h := sha1.New()
-
-    f, err := os.Open(filepath)
-    log.PanicIf(err)
-
-    defer f.Close()
-
-    _, err = io.Copy(h, f)
-    log.PanicIf(err)
-
-    hashBytes := h.Sum(nil)[:20]
-    return hashBytes
 }
 
 func writeGroupInfoAsJson(fg *geoautogroup.FindGroups, collected []map[string]interface{}, filepath string) (err error) {
