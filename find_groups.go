@@ -378,6 +378,8 @@ func (fg *FindGroups) getCurrentPositionImages() (outputRecords []currentImageRe
             comment := fmt.Sprintf("Updated geographic info from location record with filename [%s], timestamp [%s], and cell [%s]", path.Base(locationGr.Filepath), locationGr.Timestamp.Format(time.RFC3339), cell.ToToken())
             imageGr.AddComment(comment)
             imageGr.AddRelated(locationGr, GeographicRelationshipSourceLocationRecord)
+
+            imageGr.HasGeographic = true
         }
 
         // Now, we'll construct the group that this image should be a part
