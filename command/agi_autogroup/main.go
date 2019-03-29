@@ -174,6 +174,10 @@ func handleGroup(groupArguments groupParameters) {
     // Run the grouping operation.
 
     gr := geoautogroup.NewGroupsReducer(fg)
+
+    // Merge smaller cities with smaller datasets into the groups for larger
+    // cities.
+
     collectedGroups, merged := gr.Reduce()
 
     if merged > 0 {
@@ -188,8 +192,12 @@ func handleGroup(groupArguments groupParameters) {
         }
     }
 
-    // Merge smaller cities with smaller datasets into the groups for larger
-    // cities.
+    // Copy images.
+
+    if groupArguments.CopyPath != "" {
+        fmt.Printf("Copying images.\n")
+        fmt.Printf("\n")
+    }
 
     kmlTallies := make(map[geoattractor.CityRecord][2]int)
     collected := make([]map[string]interface{}, 0)
