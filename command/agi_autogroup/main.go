@@ -182,8 +182,10 @@ func handleGroup(groupArguments groupParameters) {
             keptCount += len(groups)
         }
 
-        fmt.Printf("Coalesced (%d) trivial groups. There are (%d) final groups.\n", merged, keptCount)
-        fmt.Printf("\n")
+        if groupArguments.PrintStats == true {
+            fmt.Printf("Coalesced (%d) trivial groups. There are (%d) final groups.\n", merged, keptCount)
+            fmt.Printf("\n")
+        }
     }
 
     // Merge smaller cities with smaller datasets into the groups for larger
