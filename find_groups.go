@@ -22,11 +22,6 @@ var (
 )
 
 const (
-    // // DefaultCoalescenceWindowDuration is the distance that we'll use to
-    // // determine if the current image might belong to the same group as the last
-    // // image if all of the other factors match.
-    // DefaultCoalescenceWindowDuration = time.Hour * 24
-
     // TimeKeyAlignment is a factor that determines how images should be grouped
     // together on the basis of their timestamps if their grouping factors are
     // otherwise identical. In seconds.
@@ -87,9 +82,6 @@ type FindGroups struct {
     currentGroupKey      map[string]GroupKey
     currentGroup         map[string][]*geoindex.GeographicRecord
 
-    // roundingWindowDuration    time.Duration
-    // coalescenceWindowDuration time.Duration
-
     locationMatcherFn LocationMatcherFn
 
     bufferedGroups *iterativeGroupBuffers
@@ -112,9 +104,7 @@ func NewFindGroups(locationTs timeindex.TimeSlice, imageTs timeindex.TimeSlice, 
         nearestCityIndex:  make(map[string]geoattractor.CityRecord),
         currentGroupKey:   make(map[string]GroupKey),
         currentGroup:      make(map[string][]*geoindex.GeographicRecord, 0),
-        // roundingWindowDuration:    DefaultRoundingWindowDuration,
-        // coalescenceWindowDuration: DefaultCoalescenceWindowDuration,
-        bufferedGroups: igb,
+        bufferedGroups:    igb,
     }
 
     fg.locationMatcherFn = fg.findLocationByTimeBestGuess
@@ -131,14 +121,6 @@ func (fg *FindGroups) SetLocationMatchStrategy(strategy string) {
         log.Panicf("location-match strategy [%s] not valid", strategy)
     }
 }
-
-// func (fg *FindGroups) SetRoundingWindowDuration(roundingWindowDuration time.Duration) {
-//     fg.roundingWindowDuration = roundingWindowDuration
-// }
-
-// func (fg *FindGroups) SetCoalescenceWindowDuration(coalescenceWindowDuration time.Duration) {
-//     fg.coalescenceWindowDuration = coalescenceWindowDuration
-// }
 
 // NearestCityIndex returns all of the cities that we've grouped the images by
 // in a map keyed the same as in the grouping.
