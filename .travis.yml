@@ -9,5 +9,20 @@ go:
 install:
   - go get -t ./...
   - go get github.com/mattn/goveralls
+  - go get github.com/mitchellh/gox
 script:
   - goveralls -v -service=travis-ci
+before_deploy:
+  - gox -output "build/{{.Dir}}.{{.OS}}-{{.Arch}}" ./...
+deploy:
+  skip_cleanup: true
+  provider: releases
+  api_key:
+    secure: 922256ec280074dd8df21dae25b003c93fc92763
+  file_glob: true
+  file: build/*
+  overwrite: true
+  on:
+    repo: dsoprea/go-geographic-autogroup-images
+    go: 'stable'
+    tags: true
