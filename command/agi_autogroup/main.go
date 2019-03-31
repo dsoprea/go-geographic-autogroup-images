@@ -82,10 +82,10 @@ type groupParameters struct {
     indexParameters
 
     LocationsAreSparse         bool   `long:"sparse-data" description:"Location data is sparse. Sparse datasets will not record points if there has been no movement."`
-    KmlFilepath                string `long:"kml-filepath" description:"Write KML to the given file"`
+    KmlFilepath                string `long:"kml-filepath" description:"Write KML to the given file. Enabled by default and named 'groups.kml' in the --copy-into-path argument if provided. Can be disabled using 'none'."`
     KmlMinimumGroupImageCount  int    `long:"kml-minimum" description:"Exclude groups with less than N images from the KML" default:"20"`
-    JsonFilepath               string `long:"json-filepath" description:"Write JSON to the given file"`
-    UnassignedFilepath         string `long:"unassigned-filepath" description:"File to write unassigned files to"`
+    JsonFilepath               string `long:"json-filepath" description:"Write JSON to the given file. Enabled by default and named 'groups.json' in the --copy-into-path argument if provided. Can be disabled using 'none'."`
+    UnassignedFilepath         string `long:"unassigned-filepath" description:"File to write unassigned files to. Enabled by default and named 'unassigned.txt' in --copy-into-path argument if provided."`
     PrintStats                 bool   `long:"stats" description:"Print statistics"`
     CopyPath                   string `long:"copy-into-path" description:"Copy grouped images into this path"`
     ImageOutputPathTemplate    string `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}}-{{.day_number}} {{.location}}{{.path_sep}}{{.camera_model}}/{{.hour}}.{{.minute}}"`
@@ -327,7 +327,16 @@ func handleGroup(groupArguments groupParameters) {
 
     // TODO(dustin): !! Make sure that files that returned nil,nil from the image processor in go-geographic-index is logged as unassigned. Otherwise, we'll have no chance of debugging image issues.
 
-    if groupArguments.JsonFilepath != "" {
+    jsonFilepath := groupArguments.JsonFilepath
+    if jsonFilepath == "" {
+        if groupArguments.CopyPath != "" {
+            jsonFilepath = path.Join(groupArguments.CopyPath, "groups.json")
+        } else {
+            jsonFilepath = "none"
+        }
+    }
+
+    if jsonFilepath != "none" {
         // Write all of the final data as a JSON structure.
 
         encodedGroups := make([]map[string]interface{}, len(collected))
@@ -374,25 +383,49 @@ func handleGroup(groupArguments groupParameters) {
             encodedGroups[i] = item
         }
 
-        err := writeGroupInfoAsJson(fg, encodedGroups, groupArguments.JsonFilepath)
+        err := writeGroupInfoAsJson(fg, encodedGroups, jsonFilepath)
         log.PanicIf(err)
     }
 
     unassignedRecords := fg.UnassignedRecords()
 
-    if len(unassignedRecords) > 0 && groupArguments.UnassignedFilepath != "" {
-        f, err := os.Create(groupArguments.UnassignedFilepath)
-        log.PanicIf(err)
+    len_ := len(unassignedRecords)
+    if len_ > 0 {
+        fmt.Printf("(%d) records could not be matched with locations.\n", len_)
+        fmt.Printf("\n")
 
-        defer f.Close()
+        unassignedFilepath := groupArguments.UnassignedFilepath
+        if unassignedFilepath == "" {
+            if groupArguments.CopyPath != "" {
+                unassignedFilepath = path.Join(groupArguments.CopyPath, "unassigned.txt")
+            } else {
+                unassignedFilepath = "none"
+            }
+        }
 
-        for _, ur := range unassignedRecords {
-            fmt.Fprintf(f, "%s\t%s\n", ur.Geographic.Filepath, ur.Reason)
+        if unassignedFilepath != "none" {
+            f, err := os.Create(unassignedFilepath)
+            log.PanicIf(err)
+
+            defer f.Close()
+
+            for _, ur := range unassignedRecords {
+                fmt.Fprintf(f, "%s\t%s\n", ur.Geographic.Filepath, ur.Reason)
+            }
         }
     }
 
-    if groupArguments.KmlFilepath != "" {
-        err := writeGroupInfoAsKml(kmlTallies, groupArguments.KmlFilepath)
+    kmlFilepath := groupArguments.KmlFilepath
+    if kmlFilepath == "" {
+        if groupArguments.CopyPath != "" {
+            kmlFilepath = path.Join(groupArguments.CopyPath, "groups.kml")
+        } else {
+            kmlFilepath = "none"
+        }
+    }
+
+    if kmlFilepath != "none" {
+        err := writeGroupInfoAsKml(kmlTallies, kmlFilepath)
         log.PanicIf(err)
     }
 }
@@ -532,6 +565,7 @@ func main() {
 
     _, err := p.Parse()
     if err != nil {
+        fmt.Printf("%s\n", err)
         os.Exit(1)
     }
 
