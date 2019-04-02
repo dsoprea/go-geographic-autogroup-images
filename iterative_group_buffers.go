@@ -204,6 +204,8 @@ func (bg *bufferedGroup) pushImage(nearestCityKey string, gr *geoindex.Geographi
     if lastBi.nearestCityKey == nearestCityKey {
         effectiveTimekey = bg.lastTimeKey
         gr.AddComment(fmt.Sprintf("Inheriting time-key [%s] of previous record with same city [%s]: [%s] (%.6f, %.6f)", effectiveTimekey, nearestCityKey, path.Base(lastBi.gr.Filepath), lastBi.gr.Latitude, lastBi.gr.Longitude))
+    } else {
+        gr.AddComment(fmt.Sprintf("Left-adjacent image in buffer is [%s] with different city [%s] at coordinates (%.6f, %.6f) and time-key [%v]", path.Base(lastBi.gr.Filepath), lastBi.nearestCityKey, lastBi.gr.Latitude, lastBi.gr.Longitude, bg.lastTimeKey))
     }
 
     // Now, append.
