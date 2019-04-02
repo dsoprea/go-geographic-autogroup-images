@@ -420,6 +420,26 @@ func handleGroup(groupArguments groupParameters) {
                 fmt.Fprintf(f, "%s\t%s\n", ur.Geographic.Filepath, ur.Reason)
             }
         }
+
+        groupedUnassigned := make(map[string]int)
+
+        for _, ur := range unassignedRecords {
+            if existing, found := groupedUnassigned[ur.Reason]; found == true {
+                groupedUnassigned[ur.Reason] = existing + 1
+            } else {
+                groupedUnassigned[ur.Reason] = 1
+            }
+        }
+
+        fmt.Printf("Unassigned Reasons Counts\n")
+        fmt.Printf("=========================\n")
+        fmt.Printf("\n")
+
+        for reason, count := range groupedUnassigned {
+            fmt.Printf("%s: (%d)\n", reason, count)
+        }
+
+        fmt.Printf("\n")
     }
 
     kmlFilepath := groupArguments.KmlFilepath
