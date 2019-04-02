@@ -81,18 +81,19 @@ type groupParameters struct {
     attractorParameters
     indexParameters
 
-    LocationsAreSparse         bool   `long:"sparse-data" description:"Location data is sparse. Sparse datasets will not record points if there has been no movement."`
-    KmlFilepath                string `long:"kml-filepath" description:"Write KML to the given file. Enabled by default and named 'groups.kml' in the --copy-into-path argument if provided. Can be disabled using 'none'."`
-    KmlMinimumGroupImageCount  int    `long:"kml-minimum" description:"Exclude groups with less than N images from the KML" default:"20"`
-    JsonFilepath               string `long:"json-filepath" description:"Write JSON to the given file. Enabled by default and named 'groups.json' in the --copy-into-path argument if provided. Can be disabled using 'none'."`
-    UnassignedFilepath         string `long:"unassigned-filepath" description:"File to write unassigned files to. Enabled by default and named 'unassigned.txt' in --copy-into-path argument if provided."`
-    PrintStats                 bool   `long:"stats" description:"Print statistics"`
-    CopyPath                   string `long:"copy-into-path" description:"Copy grouped images into this path"`
-    ImageOutputPathTemplate    string `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}}-{{.day_number}} {{.location}}{{.path_sep}}{{.camera_model}}/{{.hour}}.{{.minute}}"`
-    NoPrintProgressOutput      bool   `long:"no-dots" description:"Don't print dot progress output if copying"`
-    NoHashChecksOnExisting     bool   `long:"no-hash-checks" description:"If the file already exists in copy-path skip without calculating hash"`
-    ImageTimestampSkewRaw      string `long:"image-timestamp-skew" description:"A duration to add to the timestamps of the images to compensate for their timezones. By default, all images are interpreted as UTC (a requirement of EXIF). Example: 5h"`
-    ImageTimestampSkewPolarity bool   `long:"image-timestamp-skew-polarity" description:"If skew is being used, true if it should be negative and false if positive"`
+    LocationsAreSparse         bool     `long:"sparse-data" description:"Location data is sparse. Sparse datasets will not record points if there has been no movement."`
+    KmlFilepath                string   `long:"kml-filepath" description:"Write KML to the given file. Enabled by default and named 'groups.kml' in the --copy-into-path argument if provided. Can be disabled using 'none'."`
+    KmlMinimumGroupImageCount  int      `long:"kml-minimum" description:"Exclude groups with less than N images from the KML" default:"20"`
+    JsonFilepath               string   `long:"json-filepath" description:"Write JSON to the given file. Enabled by default and named 'groups.json' in the --copy-into-path argument if provided. Can be disabled using 'none'."`
+    UnassignedFilepath         string   `long:"unassigned-filepath" description:"File to write unassigned files to. Enabled by default and named 'unassigned.txt' in --copy-into-path argument if provided."`
+    PrintStats                 bool     `long:"stats" description:"Print statistics"`
+    CopyPath                   string   `long:"copy-into-path" description:"Copy grouped images into this path"`
+    ImageOutputPathTemplate    string   `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}}-{{.day_number}} {{.location}}{{.path_sep}}{{.camera_model}}/{{.hour}}.{{.minute}}"`
+    NoPrintProgressOutput      bool     `long:"no-dots" description:"Don't print dot progress output if copying"`
+    NoHashChecksOnExisting     bool     `long:"no-hash-checks" description:"If the file already exists in copy-path skip without calculating hash"`
+    ImageTimestampSkewRaw      string   `long:"image-timestamp-skew" description:"A duration to add to the timestamps of the images to compensate for their timezones. By default, all images are interpreted as UTC (a requirement of EXIF). Example: 5h"`
+    ImageTimestampSkewPolarity bool     `long:"image-timestamp-skew-polarity" description:"If skew is being used, true if it should be negative and false if positive"`
+    TraceImages                []string `long:"trace-image" description:"Zero or more absolute file-paths of images to record additional processing comments for"`
 
     sourceCatalogParameters
 }
@@ -168,6 +169,10 @@ func handleGroup(groupArguments groupParameters) {
     }()
 
     sessionTimestampPhrase := geoautogroup.GetCondensedDatetime(time.Now())
+
+    if len(groupArguments.TraceImages) > 0 {
+        geoautogroup.InitImageTrace(groupArguments.TraceImages)
+    }
 
     fg, ci := getFindGroups(groupArguments)
 
@@ -322,6 +327,8 @@ func handleGroup(groupArguments groupParameters) {
             for _, ti := range tallies {
                 fmt.Printf("%s: (%d)\n", ti.name, ti.count)
             }
+
+            fmt.Printf("\n")
         }
     }
 
@@ -427,6 +434,23 @@ func handleGroup(groupArguments groupParameters) {
     if kmlFilepath != "none" {
         err := writeGroupInfoAsKml(kmlTallies, kmlFilepath)
         log.PanicIf(err)
+    }
+
+    if geoautogroup.IsImageTraceIndexInited() {
+        fmt.Printf("Image Traces\n")
+        fmt.Printf("============\n")
+        fmt.Printf("\n")
+
+        for filepath, comments := range geoautogroup.ImageTraceIndex() {
+            fmt.Printf("%s\n", filepath)
+            fmt.Printf("\n")
+
+            for _, comment := range comments {
+                fmt.Printf("- %s\n", comment)
+            }
+
+            fmt.Printf("\n")
+        }
     }
 }
 

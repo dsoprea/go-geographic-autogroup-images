@@ -26,11 +26,18 @@ const (
     // together on the basis of their timestamps if their grouping factors are
     // otherwise identical. In seconds.
     TimeKeyAlignment = 60 * 10
+
+    // These are especially important with sparse input location data. If
+    // there's a gap in the data than this will mitigate extremely old location
+    // being attached to the images.
+    LocationMatchTimeWarnIntervalThreshold = time.Hour * 8
+    LocationMatchTimeSkipIntervalThreshold = time.Hour * 10
 )
 
 const (
     SkipReasonNoNearLocationRecord = "no matching/near location record"
     SkipReasonNoNearCity           = "no near city"
+    SkipReasonLocationTooFar       = "matched location record too old"
 )
 
 const (
@@ -348,6 +355,8 @@ func (fg *FindGroups) getCurrentPositionImages() (outputRecords []currentImageRe
 
         imageGr := item.(*geoindex.GeographicRecord)
 
+        PushDebugTrace(imageGr.Filepath, fmt.Sprintf("Original image record from index: %s HAS-GEOGRAPHIC=[%v]", imageGr, imageGr.HasGeographic))
+
         if imageGr.HasGeographic == false {
             // TODO(dustin): Note that we match for a location based on the timestamp in the index but that we group based on the timestamp in the image. The original was an earlier design but going with the last will likely always be at least identical accuracy and the design is a little more intuitive. Refactor the location-matching to use the image time.
             matchedTe, err := fg.locationMatcherFn(imageTe)
@@ -362,6 +371,21 @@ func (fg *FindGroups) getCurrentPositionImages() (outputRecords []currentImageRe
 
             locationItem := matchedTe.Items[0]
             locationGr := locationItem.(*geoindex.GeographicRecord)
+
+            timeDelta := imageGr.Timestamp.Sub(locationGr.Timestamp)
+
+            PushDebugTrace(imageGr.Filepath, fmt.Sprintf("Matched location: %s [%v] -> %s [%v] TIME-DELTA=[%v]", imageGr, imageGr.Timestamp, locationGr, locationGr.Timestamp, timeDelta))
+
+            if timeDelta > LocationMatchTimeWarnIntervalThreshold {
+                if timeDelta < LocationMatchTimeSkipIntervalThreshold {
+                    PushWarningTrace(imageGr.Filepath, fmt.Sprintf("Image [%s] time [%v] is very far after the time of location file [%s] record time [%v]: [%v]", imageGr.Filepath, imageGr.Timestamp, locationGr.Filepath, locationGr.Timestamp, timeDelta))
+                } else {
+                    PushWarningTrace(imageGr.Filepath, fmt.Sprintf("Image [%s] time [%v] is too far after the time of location file [%s] record time [%v] and will be skipped: [%v]", imageGr.Filepath, imageGr.Timestamp, locationGr.Filepath, locationGr.Timestamp, timeDelta))
+                }
+
+                fg.addUnassigned(imageGr, SkipReasonLocationTooFar)
+                continue
+            }
 
             // The location index should exclusively be loaded with
             // geographic data. This should never happen.
@@ -409,6 +433,8 @@ func (fg *FindGroups) getCurrentPositionImages() (outputRecords []currentImageRe
             GeographicRecord: imageGr,
             NearestCityKey:   nearestCityKey,
         }
+
+        PushDebugTrace(imageGr.Filepath, fmt.Sprintf("Final image collected/compiled from indices: TIMESTAMP=[%v] NEAREST-CITY=[%s]", cir.ImageUnixTime, cir.NearestCityKey))
 
         outputRecords = append(outputRecords, cir)
     }
