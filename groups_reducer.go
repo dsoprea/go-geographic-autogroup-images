@@ -67,6 +67,8 @@ func (gr *GroupsReducer) Reduce() (finishedGroups map[string][]*collectedGroup, 
 
         // We have one in the hopper. Can we merge?
 
+        // TODO(dustin): !! We should create the directories with the local timezone, not UTC.
+        // TODO(dustin): !! This comparison needs to convert to the local timezone first.
         isDifferentDay := lastCg.GroupKey.TimeKey.Year() != groupKey.TimeKey.Year() || lastCg.GroupKey.TimeKey.Month() != groupKey.TimeKey.Month() || lastCg.GroupKey.TimeKey.Day() != groupKey.TimeKey.Day()
         lastWasLarge := len(lastCg.Records) > trivialGroupMaximumSize
         currentIsLarge := len(records) > trivialGroupMaximumSize

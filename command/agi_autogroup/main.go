@@ -69,8 +69,10 @@ type attractorParameters struct {
 // indexParameters are the parameters common to anything that needs to load a
 // `geoindex.GeographicCollector`.
 type indexParameters struct {
-    DataPaths  []string `long:"data-path" description:"Path to scan for geographic data (GPX files and image files; can be provided more than once)" required:"true"`
-    ImagePaths []string `long:"image-path" description:"Path to scan for images to group (can be provided more than once)" required:"true"`
+    // TODO(dustin): !! Does `required` work as intended here (fails if zero but more than one is okay).
+    DataPaths         []string `long:"data-path" description:"Path to scan for geographic data (GPX files and image files; can be provided more than once)" required:"true"`
+    ImagePaths        []string `long:"image-path" description:"Path to scan for images to group (can be provided more than once)" required:"true"`
+    ListfileFilepaths []string `long:"listfile-location-data-filepath" description:"Zero or more files to read a list of location IDs and timestamps to directly insert to the location index"`
 }
 
 type sourceCatalogParameters struct {
@@ -124,6 +126,22 @@ func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups,
 
     if groupArguments.PrintStats == true {
         fmt.Printf("(%d) records loaded in location index.\n", len(locationTs))
+    }
+
+    if groupArguments.ListfileFilepaths != nil {
+        for _, filepath := range groupArguments.ListfileFilepaths {
+            f, err := os.Open(filepath)
+            log.PanicIf(err)
+
+            defer f.Close()
+
+            listfileRecordCount, err := geoautogroup.LoadLocationListFile(ci, filepath, f, locationIndex)
+            log.PanicIf(err)
+
+            if groupArguments.PrintStats == true {
+                fmt.Printf("Read (%d) records from list-file [%s].\n", listfileRecordCount, filepath)
+            }
+        }
     }
 
     var imageTimestampSkew time.Duration
@@ -609,7 +627,6 @@ func main() {
 
     _, err := p.Parse()
     if err != nil {
-        fmt.Printf("%s\n", err)
         os.Exit(1)
     }
 
