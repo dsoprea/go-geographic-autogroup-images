@@ -41,11 +41,8 @@ func GetCityIndex(countriesFilepath, citiesFilepath string) (ci *geoattractorind
     return ci, nil
 }
 
-// GetTimeIndex load an index with images or locations. We'll just register
-// both because in general we're called once for one and once for the other.
-// There will be limited overhead due to wasted cycled spent on skipping in
-// either case.
-func GetTimeIndex(paths []string, imageTimestampSkew time.Duration) (ti *geoindex.TimeIndex, err error) {
+// GetImageTimeIndex load an index with images.
+func GetImageTimeIndex(paths []string, imageTimestampSkew time.Duration, cameraModels []string) (ti *geoindex.TimeIndex, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -56,8 +53,28 @@ func GetTimeIndex(paths []string, imageTimestampSkew time.Duration) (ti *geoinde
     ti = geoindex.NewTimeIndex()
     gc := geoindex.NewGeographicCollector(ti, nil)
 
-    err = geoindex.RegisterImageFileProcessors(gc, imageTimestampSkew)
+    err = geoindex.RegisterImageFileProcessors(gc, imageTimestampSkew, cameraModels)
     log.PanicIf(err)
+
+    for _, scanPath := range paths {
+        err := gc.ReadFromPath(scanPath)
+        log.PanicIf(err)
+    }
+
+    return ti, nil
+}
+
+// GetLocationTimeIndex load an index with locations.
+func GetLocationTimeIndex(paths []string) (ti *geoindex.TimeIndex, err error) {
+    defer func() {
+        if state := recover(); state != nil {
+            err = log.Wrap(state.(error))
+            log.Panic(err)
+        }
+    }()
+
+    ti = geoindex.NewTimeIndex()
+    gc := geoindex.NewGeographicCollector(ti, nil)
 
     err = geoindex.RegisterDataFileProcessors(gc)
     log.PanicIf(err)

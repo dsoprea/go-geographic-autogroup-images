@@ -96,6 +96,7 @@ type groupParameters struct {
     ImageTimestampSkewRaw      string   `long:"image-timestamp-skew" description:"A duration to be combined with the given polarity and added to the timestamps of the images to shift them to the local timezone. By default, all images are interpreted as UTC (a requirement of EXIF). Example: 5h"`
     ImageTimestampSkewPolarity bool     `long:"image-timestamp-skew-polarity" description:"If skew is being used, true if it should be negative and false if positive"`
     TraceImages                []string `long:"trace-image" description:"Zero or more absolute file-paths of images to record additional processing comments for"`
+    CameraModels               []string `long:"camera-model" description:"Zero or more camera-models to specifically include to the exclusion of all others"`
 
     sourceCatalogParameters
 }
@@ -119,7 +120,7 @@ func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups,
     ci, err := geoautogroup.GetCityIndex(groupArguments.attractorParameters.CountriesFilepath, groupArguments.attractorParameters.CitiesFilepath)
     log.PanicIf(err)
 
-    locationIndex, err := geoautogroup.GetTimeIndex(groupArguments.indexParameters.DataPaths, 0)
+    locationIndex, err := geoautogroup.GetLocationTimeIndex(groupArguments.indexParameters.DataPaths)
     log.PanicIf(err)
 
     locationTs := locationIndex.Series()
@@ -155,7 +156,12 @@ func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups,
         }
     }
 
-    imageIndex, err := geoautogroup.GetTimeIndex(groupArguments.indexParameters.ImagePaths, imageTimestampSkew)
+    var cameraModels []string
+    if len(groupArguments.CameraModels) > 0 {
+        cameraModels = groupArguments.CameraModels
+    }
+
+    imageIndex, err := geoautogroup.GetImageTimeIndex(groupArguments.indexParameters.ImagePaths, imageTimestampSkew, cameraModels)
     log.PanicIf(err)
 
     imageTs := imageIndex.Series()
