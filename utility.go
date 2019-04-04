@@ -3,7 +3,6 @@ package geoautogroup
 import (
     "fmt"
     "io"
-    "strings"
     "time"
 
     "encoding/csv"
@@ -71,6 +70,8 @@ func GetTimeIndex(paths []string, imageTimestampSkew time.Duration) (ti *geoinde
     return ti, nil
 }
 
+// GetCondensedDatetime returns a timestamp string in whatever timezone the
+// input value is.
 func GetCondensedDatetime(t time.Time) string {
     return fmt.Sprintf("%d%02d%02d-%02d%02d%02d", t.Year(), int(t.Month()), t.Day(), t.Hour(), t.Minute(), t.Second())
 }
@@ -85,6 +86,10 @@ func LoadLocationListFile(ci *geoattractorindex.CityIndex, filepath string, r io
     }()
 
     c := csv.NewReader(r)
+
+    c.Comment = '#'
+    c.FieldsPerRecord = 3
+
     for i := 0; ; i++ {
         record, err := c.Read()
         if err != nil {
@@ -93,18 +98,6 @@ func LoadLocationListFile(ci *geoattractorindex.CityIndex, filepath string, r io
             }
 
             log.Panic(err)
-        }
-
-        if len(record) == 1 {
-            if strings.TrimSpace(record[0]) == "" {
-                continue
-            } else if record[0][0] == '#' {
-                continue
-            }
-        }
-
-        if len(record) != 3 {
-            log.Panicf("record (%d) does not have the right number of columns: %v", i, record)
         }
 
         sourceName := record[0]
