@@ -49,15 +49,17 @@ func copyFiles(groupArguments groupParameters, fg *geoautogroup.FindGroups, fini
         location = fmt.Sprintf("%s, %s", cityRecord.City, cityRecord.Country)
     }
 
+    localTimeKey := timeKey.Local()
+
     // TODO(dustin): !! We should create the directories with the local timezone, not UTC.
     replacements := map[string]interface{}{
         "year":                    timeKey.Year(),
-        "month_number":            fmt.Sprintf("%02d", timeKey.Month()),
-        "month_name":              fmt.Sprintf("%s", timeKey.Month()),
-        "day_number":              fmt.Sprintf("%02d", timeKey.Day()),
-        "hour":                    fmt.Sprintf("%02d", timeKey.Hour()),
-        "minute":                  fmt.Sprintf("%02d", timeKey.Minute()),
-        "second":                  fmt.Sprintf("%02d", timeKey.Second()),
+        "month_number":            fmt.Sprintf("%02d", localTimeKey.Month()),
+        "month_name":              fmt.Sprintf("%s", localTimeKey.Month()),
+        "day_number":              fmt.Sprintf("%02d", localTimeKey.Day()),
+        "hour":                    fmt.Sprintf("%02d", localTimeKey.Hour()),
+        "minute":                  fmt.Sprintf("%02d", localTimeKey.Minute()),
+        "second":                  fmt.Sprintf("%02d", localTimeKey.Second()),
         "city_and_province_state": cityprovince,
         "location":                location,
         "country":                 cityRecord.Country,

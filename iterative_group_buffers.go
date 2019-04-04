@@ -255,11 +255,11 @@ func (bg *bufferedGroup) pushImage(nearestCityKey string, gr *geoindex.Geographi
                     log.Panicf("current BI during smoothing is no longer the same time-key: [%v] != [%s]", bi.effectiveTimekey, currentTimekey)
                 }
 
-                // The amount of time elapsed between this image and the first
-                // image we encountered at the same city and time-key.
-                timeSinceAberration := bi.gr.Timestamp.Sub(firstEncounteredBi.gr.Timestamp)
-
                 if bi.nearestCityKey != nearestCityKey {
+                    // The amount of time elapsed between this image and the first
+                    // image we encountered at the same city and time-key.
+                    timeSinceAberration := bi.gr.Timestamp.Sub(firstEncounteredBi.gr.Timestamp)
+
                     bi.gr.AddComment(fmt.Sprintf("Smoothed image <time-key [%v] timestamp [%v] city [%s] file [%s]> to city [%s] (from just-pushed image <time-key [%v] timestamp [%v] city [%s] file [%s]>). TIME-BETWEEN=[%s] STEP=(%d/%d)", bi.effectiveTimekey, bi.gr.Timestamp, bi.nearestCityKey, path.Base(bi.gr.Filepath), nearestCityKey, currentTimekey, gr.Timestamp, nearestCityKey, path.Base(gr.Filepath), timeSinceAberration, i+1, n))
                     bi.nearestCityKey = nearestCityKey
                 }

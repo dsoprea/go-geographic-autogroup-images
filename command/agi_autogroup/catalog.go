@@ -77,8 +77,11 @@ func writeDestHtmlCatalog(groupArguments groupParameters, fg *geoautogroup.FindG
 
         cityRecord := nearestCityIndex[groupKey.NearestCityKey]
 
-        timePhrase := fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", groupKey.TimeKey.Year(), groupKey.TimeKey.Month(), groupKey.TimeKey.Day(), groupKey.TimeKey.Hour(), groupKey.TimeKey.Minute(), groupKey.TimeKey.Second())
-        childPageTitle := fmt.Sprintf("%s UTC (%s) %s", timePhrase, cityRecord.CityAndProvinceState(), groupKey.CameraModel)
+        localTimeKey := groupKey.TimeKey.Local()
+
+        tzName, _ := localTimeKey.Zone()
+        timePhrase := fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d %s", localTimeKey.Year(), localTimeKey.Month(), localTimeKey.Day(), localTimeKey.Hour(), localTimeKey.Minute(), localTimeKey.Second(), tzName)
+        childPageTitle := fmt.Sprintf("%s (%s) %s", timePhrase, cityRecord.CityAndProvinceState(), groupKey.CameraModel)
 
         navbarTitle := fmt.Sprintf("%s (%d)", childPageTitle, len(groupedItems))
 

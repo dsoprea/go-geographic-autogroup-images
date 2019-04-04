@@ -93,7 +93,7 @@ type groupParameters struct {
     ImageOutputPathTemplate    string   `long:"output-template" description:"Group output path name template within the output path. Can use Go template tokens." default:"{{.year}}-{{.month_number}}-{{.day_number}} {{.location}}{{.path_sep}}{{.camera_model}}/{{.hour}}.{{.minute}}"`
     NoPrintProgressOutput      bool     `long:"no-dots" description:"Don't print dot progress output if copying"`
     NoHashChecksOnExisting     bool     `long:"no-hash-checks" description:"If the file already exists in copy-path skip without calculating hash"`
-    ImageTimestampSkewRaw      string   `long:"image-timestamp-skew" description:"A duration to add to the timestamps of the images to compensate for their timezones. By default, all images are interpreted as UTC (a requirement of EXIF). Example: 5h"`
+    ImageTimestampSkewRaw      string   `long:"image-timestamp-skew" description:"A duration to be combined with the given polarity and added to the timestamps of the images to shift them to the local timezone. By default, all images are interpreted as UTC (a requirement of EXIF). Example: 5h"`
     ImageTimestampSkewPolarity bool     `long:"image-timestamp-skew-polarity" description:"If skew is being used, true if it should be negative and false if positive"`
     TraceImages                []string `long:"trace-image" description:"Zero or more absolute file-paths of images to record additional processing comments for"`
 
