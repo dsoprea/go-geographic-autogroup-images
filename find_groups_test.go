@@ -417,7 +417,7 @@ func TestFindGroups_FindNext_ImagesWithLocations_SameModel(t *testing.T) {
             err := log.Wrap(state.(error))
             log.PrintError(err)
 
-            panic(err)
+            t.Fatalf("Test error.")
         }
     }()
 
@@ -433,7 +433,7 @@ func TestFindGroups_FindNext_ImagesWithLocations_SameModel(t *testing.T) {
     citiesFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
     countriesFilepath := path.Join(testAssetsPath, "countryInfo.txt")
 
-    ci, err := GetCityIndex(countriesFilepath, citiesFilepath)
+    ci, err := GetCityIndex("", countriesFilepath, citiesFilepath)
     log.PanicIf(err)
 
     locationTs := locationTi.Series()
@@ -595,7 +595,7 @@ func TestFindGroups_FindNext_ImagesWithLocations_DifferentModels_AlignedWithTime
     citiesFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
     countriesFilepath := path.Join(testAssetsPath, "countryInfo.txt")
 
-    ci, err := GetCityIndex(countriesFilepath, citiesFilepath)
+    ci, err := GetCityIndex("", countriesFilepath, citiesFilepath)
     log.PanicIf(err)
 
     locationTs := locationTi.Series()
@@ -744,7 +744,7 @@ func TestFindGroups_FindNext_ImagesWithLocations_DifferentModels_NotAlignedWithT
     citiesFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
     countriesFilepath := path.Join(testAssetsPath, "countryInfo.txt")
 
-    ci, err := GetCityIndex(countriesFilepath, citiesFilepath)
+    ci, err := GetCityIndex("", countriesFilepath, citiesFilepath)
     log.PanicIf(err)
 
     locationTs := locationTi.Series()
@@ -991,7 +991,7 @@ func TestFindGroups_FindNext_ImagesWithoutLocations(t *testing.T) {
     citiesFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
     countriesFilepath := path.Join(testAssetsPath, "countryInfo.txt")
 
-    ci, err := GetCityIndex(countriesFilepath, citiesFilepath)
+    ci, err := GetCityIndex("", countriesFilepath, citiesFilepath)
     log.PanicIf(err)
 
     locationTs := locationTi.Series()
@@ -1133,7 +1133,7 @@ func ExampleFindGroups_FindNext() {
     citiesFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
     countriesFilepath := path.Join(testAssetsPath, "countryInfo.txt")
 
-    cityIndex, err := GetCityIndex(countriesFilepath, citiesFilepath)
+    cityIndex, err := GetCityIndex("", countriesFilepath, citiesFilepath)
     log.PanicIf(err)
 
     // We use a couple of fake indices for the purpose of the example.

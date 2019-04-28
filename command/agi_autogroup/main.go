@@ -62,17 +62,19 @@ func (tallies Tallies) Swap(i, j int) {
 // attractorParameters are the parameters common to anything that needs to load
 // a `geoattractorindex.CityIndex`.
 type attractorParameters struct {
-    CountriesFilepath string `long:"countries-filepath" description:"File-path of the GeoNames countries data (usually called 'countryInfo.txt')"`
-    CitiesFilepath    string `long:"cities-filepath" description:"File-path of the GeoNames world-cities data (usually called 'allCountries.txt')"`
+    CountriesFilepath    string `long:"countries-filepath" description:"File-path of the GeoNames countries data (usually called 'countryInfo.txt'). Not necessary if you already have a database."`
+    CitiesFilepath       string `long:"cities-filepath" description:"File-path of the GeoNames world-cities data (usually called 'allCountries.txt'). Not necessary if you already have a database."`
+    CityDatabaseFilepath string `long:"city-db-filepath" description:"File-path of city database. Will be created if does not exist." required:"true"`
 }
 
 // indexParameters are the parameters common to anything that needs to load a
 // `geoindex.GeographicCollector`.
 type indexParameters struct {
     // TODO(dustin): !! Does `required` work as intended here (fails if zero but more than one is okay).
-    DataPaths         []string `long:"data-path" description:"Path to scan for geographic data (GPX files and image files; can be provided more than once)" required:"true"`
-    ImagePaths        []string `long:"image-path" description:"Path to scan for images to group (can be provided more than once)" required:"true"`
-    ListfileFilepaths []string `long:"listfile-location-data-filepath" description:"Zero or more files to read a list of location IDs and timestamps to directly insert to the location index"`
+    DataPaths                 []string `long:"data-path" description:"Path to scan for geographic data (GPX files and image files; can be provided more than once)"`
+    LocationsDatabaseFilepath string   `long:"geographic-db-filepath" description:"File-path of locations database. Will be created if does not exist (requires --data-path to be provided). Will be updated if --data-path was given and represents different data."`
+    ImagePaths                []string `long:"image-path" description:"Path to scan for images to group (can be provided more than once)" required:"true"`
+    ListfileFilepaths         []string `long:"listfile-location-data-filepath" description:"Zero or more files to read a list of location IDs and timestamps to directly insert to the location index"`
 }
 
 type sourceCatalogParameters struct {
@@ -117,10 +119,10 @@ func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups,
         }
     }()
 
-    ci, err := geoautogroup.GetCityIndex(groupArguments.attractorParameters.CountriesFilepath, groupArguments.attractorParameters.CitiesFilepath)
+    ci, err := geoautogroup.GetCityIndex(groupArguments.attractorParameters.CityDatabaseFilepath, groupArguments.attractorParameters.CountriesFilepath, groupArguments.attractorParameters.CitiesFilepath)
     log.PanicIf(err)
 
-    locationIndex, err := geoautogroup.GetLocationTimeIndex(groupArguments.indexParameters.DataPaths)
+    locationIndex, _, _, err := geoautogroup.GetLocationTimeIndex(groupArguments.indexParameters.DataPaths, groupArguments.indexParameters.LocationsDatabaseFilepath)
     log.PanicIf(err)
 
     locationTs := locationIndex.Series()
@@ -199,6 +201,8 @@ func handleGroup(groupArguments groupParameters) {
     }
 
     fg, ci := getFindGroups(groupArguments)
+
+    defer ci.Close()
 
     // Run the grouping operation.
 
