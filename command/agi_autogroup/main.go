@@ -71,7 +71,7 @@ type attractorParameters struct {
 // indexParameters are the parameters common to anything that needs to load a
 // `geoindex.GeographicCollector`.
 type indexParameters struct {
-    // TODO(dustin): !! Does `required` work as intended here (fails if zero but more than one is okay).
+    // TODO(dustin): !! Does `required` work as intended here (fails if zero but more than one is okay)?
     DataPaths                 []string `long:"data-path" description:"Path to scan for geographic data (GPX files and image files; can be provided more than once)"`
     LocationsDatabaseFilepath string   `long:"geographic-db-filepath" description:"File-path of locations database. Will be created if does not exist (requires --data-path to be provided). Will be updated if --data-path was given and represents different data."`
     ImagePaths                []string `long:"image-path" description:"Path to scan for images to group (can be provided more than once)" required:"true"`
@@ -229,7 +229,6 @@ func handleGroup(groupArguments groupParameters) {
     // Merge smaller cities with smaller datasets into the groups for larger
     // cities.
 
-    // TODO(dustin): !! Do we need a progress bar for this?
     collectedGroups, merged := gr.Reduce()
 
     if merged > 0 {

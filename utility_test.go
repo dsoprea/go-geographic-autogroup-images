@@ -17,7 +17,7 @@ func getTestCityIndex() (ci *geoattractorindex.CityIndex) {
     citiesFilepath := path.Join(testAssetsPath, "allCountries.txt.multiple_major_cities_handpicked")
     countriesFilepath := path.Join(testAssetsPath, "countryInfo.txt")
 
-    ci, err := GetCityIndex("", countriesFilepath, citiesFilepath)
+    ci, err := GetCityIndex("", countriesFilepath, citiesFilepath, nil, false)
     log.PanicIf(err)
 
     return ci
