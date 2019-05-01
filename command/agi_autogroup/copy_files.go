@@ -125,7 +125,7 @@ func copyFiles(groupArguments groupParameters, fg *geoautogroup.FindGroups, fini
             defer func() {
                 if state := recover(); state != nil {
                     err := log.Wrap(state.(error))
-                    log.PanicIf(err)
+                    log.Panic(err)
                 }
             }()
 
