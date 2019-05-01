@@ -89,7 +89,7 @@ func TestGetImageTimeIndex(t *testing.T) {
         path.Join(testAssetsPath, "test_sources_path1"),
     }
 
-    ti, err := GetImageTimeIndex(paths, time.Duration(0), nil)
+    ti, err := GetImageTimeIndex(paths, time.Duration(0), nil, false)
     log.PanicIf(err)
 
     ts := ti.Series()
@@ -129,7 +129,7 @@ func TestGetLocationTimeIndex_JustDataSources_Create(t *testing.T) {
 
     filepath := f.Name()
 
-    ti, dbAlreadyExists, dbUpdated, err := GetLocationTimeIndex(paths, filepath)
+    ti, dbAlreadyExists, dbUpdated, err := GetLocationTimeIndex(paths, filepath, false)
     log.PanicIf(err)
 
     if dbAlreadyExists == true {
@@ -155,7 +155,7 @@ func TestGetLocationTimeIndex_JustDataSources_Create(t *testing.T) {
 
     // Do a read *without* the sources, now.
 
-    ti, dbAlreadyExists, dbUpdated, err = GetLocationTimeIndex(nil, filepath)
+    ti, dbAlreadyExists, dbUpdated, err = GetLocationTimeIndex(nil, filepath, false)
     log.PanicIf(err)
 
     if dbAlreadyExists == false {
@@ -201,7 +201,7 @@ func TestGetLocationTimeIndex_JustDataSources_Update_NoChange(t *testing.T) {
 
     filepath := f.Name()
 
-    ti, dbAlreadyExists, dbUpdated, err := GetLocationTimeIndex(paths, filepath)
+    ti, dbAlreadyExists, dbUpdated, err := GetLocationTimeIndex(paths, filepath, false)
     log.PanicIf(err)
 
     if dbAlreadyExists == true {
@@ -228,7 +228,7 @@ func TestGetLocationTimeIndex_JustDataSources_Update_NoChange(t *testing.T) {
     // Reload and make sure it looks like it short-circuited (because there are
     // no changes) but returns the same data.
 
-    ti, dbAlreadyExists, dbUpdated, err = GetLocationTimeIndex(paths, filepath)
+    ti, dbAlreadyExists, dbUpdated, err = GetLocationTimeIndex(paths, filepath, false)
     log.PanicIf(err)
 
     if dbAlreadyExists == false {
@@ -248,7 +248,7 @@ func TestGetLocationTimeIndex_JustDataSources_Update_NoChange(t *testing.T) {
 
     // Do a read *without* the sources, now.
 
-    ti, dbAlreadyExists, dbUpdated, err = GetLocationTimeIndex(nil, filepath)
+    ti, dbAlreadyExists, dbUpdated, err = GetLocationTimeIndex(nil, filepath, false)
     log.PanicIf(err)
 
     if dbAlreadyExists == false {
@@ -294,7 +294,7 @@ func TestGetLocationTimeIndex_JustDataSources_Update_WithChange(t *testing.T) {
 
     filepath := f.Name()
 
-    ti, dbAlreadyExists, dbUpdated, err := GetLocationTimeIndex(paths, filepath)
+    ti, dbAlreadyExists, dbUpdated, err := GetLocationTimeIndex(paths, filepath, false)
     log.PanicIf(err)
 
     if dbAlreadyExists == true {
@@ -325,7 +325,7 @@ func TestGetLocationTimeIndex_JustDataSources_Update_WithChange(t *testing.T) {
         path.Join(testAssetsPath, "test_sources_path2"),
     }
 
-    ti, dbAlreadyExists, dbUpdated, err = GetLocationTimeIndex(paths, filepath)
+    ti, dbAlreadyExists, dbUpdated, err = GetLocationTimeIndex(paths, filepath, false)
     log.PanicIf(err)
 
     if dbAlreadyExists == false {
@@ -351,7 +351,7 @@ func TestGetLocationTimeIndex_JustDataSources_Update_WithChange(t *testing.T) {
 
     // Do a read *without* the sources, now.
 
-    ti, dbAlreadyExists, dbUpdated, err = GetLocationTimeIndex(nil, filepath)
+    ti, dbAlreadyExists, dbUpdated, err = GetLocationTimeIndex(nil, filepath, false)
     log.PanicIf(err)
 
     if dbAlreadyExists == false {

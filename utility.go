@@ -20,6 +20,7 @@ import (
     "github.com/dsoprea/go-logging"
     "github.com/dsoprea/go-time-index"
     "github.com/dsoprea/time-to-go"
+    "gopkg.in/cheggaaa/pb.v1"
 )
 
 var (
@@ -34,7 +35,7 @@ var (
     ErrLocationTimeIndexChecksumFail = errors.New("location time-index checksum failure")
 )
 
-func GetCityIndex(cityKvFilepath, countriesFilepath, citiesFilepath string) (ci *geoattractorindex.CityIndex, err error) {
+func GetCityIndex(cityKvFilepath, countriesFilepath, citiesFilepath string, countryFilter []string, beVerbose bool) (ci *geoattractorindex.CityIndex, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -67,17 +68,51 @@ func GetCityIndex(cityKvFilepath, countriesFilepath, citiesFilepath string) (ci 
     }
 
     ci = geoattractorindex.NewCityIndex(cityKvFilepath, minimumLevelForUrbanCenterAttraction, urbanCenterMinimumPopulation)
+    ci.SetVerbose(beVerbose)
+
+    if alreadyExists == true {
+        count, err := ci.KvCount()
+        log.PanicIf(err)
+
+        if count == 0 {
+            alreadyExists = false
+            utilityLogger.Warningf(nil, "Cities database exists but is empty.")
+        }
+    }
 
     if alreadyExists == false {
         gp, err := geoattractorparse.NewGeonamesParserWithFiles(countriesFilepath)
         log.PanicIf(err)
 
+        // Get record count. This takes a few seconds but pales in comparison
+        // to the amount of time it takes to populate the DB. So, better to have
+        // a progress information on the latter.
+
+        if beVerbose == true {
+            fmt.Printf("Counting city records.\n")
+        }
+
         g, err := geoattractorparse.GetCitydataReadCloser(citiesFilepath)
+        if err != nil {
+            g.Close()
+            log.Panic(err)
+        }
+
+        recordsCount, err := gp.Parse(g, nil)
+        log.PanicIf(err)
+
+        g.Close()
+
+        // Actually process the data.
+
+        ci.SetTotalRecords(recordsCount)
+
+        g, err = geoattractorparse.GetCitydataReadCloser(citiesFilepath)
         log.PanicIf(err)
 
         defer g.Close()
 
-        err = ci.Load(gp, g, nil)
+        err = ci.Load(gp, g, nil, countryFilter)
         log.PanicIf(err)
     }
 
@@ -85,7 +120,7 @@ func GetCityIndex(cityKvFilepath, countriesFilepath, citiesFilepath string) (ci 
 }
 
 // GetImageTimeIndex load an index with images.
-func GetImageTimeIndex(paths []string, imageTimestampSkew time.Duration, cameraModels []string) (ti *geoindex.TimeIndex, err error) {
+func GetImageTimeIndex(paths []string, imageTimestampSkew time.Duration, cameraModels []string, beVerbose bool) (ti *geoindex.TimeIndex, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -93,8 +128,29 @@ func GetImageTimeIndex(paths []string, imageTimestampSkew time.Duration, cameraM
         }
     }()
 
+    imageFileCount, err := CountImageFiles(paths)
+    log.PanicIf(err)
+
     ti = geoindex.NewTimeIndex()
     gc := geoindex.NewGeographicCollector(ti, nil)
+
+    var imageBar *pb.ProgressBar
+    if beVerbose == true {
+        imageBar = pb.New(imageFileCount)
+        imageBar.Prefix("Loading images ")
+        imageBar.SetMaxWidth(100)
+        imageBar.Start()
+    }
+
+    progressCb := func(filepath string) (err error) {
+        if imageBar != nil {
+            imageBar.Increment()
+        }
+
+        return nil
+    }
+
+    gc.SetFileProcessedCallback(progressCb)
 
     err = geoindex.RegisterImageFileProcessors(gc, imageTimestampSkew, nil)
     log.PanicIf(err)
@@ -104,11 +160,15 @@ func GetImageTimeIndex(paths []string, imageTimestampSkew time.Duration, cameraM
         log.PanicIf(err)
     }
 
+    if imageBar != nil {
+        imageBar.Finish()
+    }
+
     return ti, nil
 }
 
 // GetLocationTimeIndex loads/recovers an index with all found locations.
-func GetLocationTimeIndex(paths []string, locationsDatabaseFilepath string) (ti *geoindex.TimeIndex, dbAlreadyExists, dbUpdated bool, err error) {
+func GetLocationTimeIndex(paths []string, locationsDatabaseFilepath string, beVerbose bool) (ti *geoindex.TimeIndex, dbAlreadyExists, dbUpdated bool, err error) {
     defer func() {
         if state := recover(); state != nil {
             err = log.Wrap(state.(error))
@@ -129,7 +189,8 @@ func GetLocationTimeIndex(paths []string, locationsDatabaseFilepath string) (ti 
             log.Panic(err)
         }
 
-        locationStream, err = os.OpenFile(locationsDatabaseFilepath, os.O_RDWR, 0644)
+        utilityLogger.Infof(nil, "Creating time-series database.")
+        locationStream, err = os.OpenFile(locationsDatabaseFilepath, os.O_CREATE|os.O_RDWR, 0644)
         log.PanicIf(err)
     }
 
@@ -161,6 +222,9 @@ func GetLocationTimeIndex(paths []string, locationsDatabaseFilepath string) (ti 
             if log.Is(err, io.EOF) == true {
                 dbAlreadyExists = false
             } else {
+                utilityLogger.Errorf(nil, err, "There was an issue reading your location database: [%s]. If it is corrupted, please delete the existing one and provide your location data-sources to this command.", locationsDatabaseFilepath)
+                fmt.Printf("There was an issue reading your location database [%s]: [%s]. If it is corrupted, please delete the existing one and provide your location data-sources to this command.\n", locationsDatabaseFilepath, err.Error())
+
                 log.Panic(err)
             }
         } else {
@@ -226,15 +290,40 @@ func GetLocationTimeIndex(paths []string, locationsDatabaseFilepath string) (ti 
 
     // Load location-index from data sources.
 
+    dataFileCount, err := CountDataFiles(paths)
+    log.PanicIf(err)
+
     ti = geoindex.NewTimeIndex()
     gc := geoindex.NewGeographicCollector(ti, nil)
+
+    var dataBar *pb.ProgressBar
+    if beVerbose == true {
+        dataBar = pb.New(dataFileCount)
+        dataBar.Prefix("Loading location data ")
+        dataBar.SetMaxWidth(100)
+        dataBar.Start()
+    }
+
+    progressCb := func(filepath string) (err error) {
+        if dataBar != nil {
+            dataBar.Increment()
+        }
+
+        return nil
+    }
+
+    gc.SetFileProcessedCallback(progressCb)
 
     err = geoindex.RegisterDataFileProcessors(gc)
     log.PanicIf(err)
 
-    for _, scanPath := range paths {
-        err := gc.ReadFromPath(scanPath)
+    for _, dataPath := range paths {
+        err := gc.ReadFromPath(dataPath)
         log.PanicIf(err)
+    }
+
+    if dataBar != nil {
+        dataBar.Finish()
     }
 
     // Create/update the series data.
@@ -280,7 +369,6 @@ func GetSha1ForPaths(paths []string) (filesSha1 []byte, err error) {
     }()
 
     gc := geoindex.NewGeographicCollector(nil, nil)
-    gc.SetNoopFlag(true)
 
     err = geoindex.RegisterDataFileProcessors(gc)
     log.PanicIf(err)
@@ -308,6 +396,46 @@ func GetSha1ForPaths(paths []string) (filesSha1 []byte, err error) {
 
     filesSha1 = h.Sum(nil)
     return filesSha1, nil
+}
+
+func CountImageFiles(paths []string) (count int, err error) {
+    defer func() {
+        if state := recover(); state != nil {
+            err = log.Wrap(state.(error))
+        }
+    }()
+
+    gc := geoindex.NewGeographicCollector(nil, nil)
+
+    err = geoindex.RegisterImageFileProcessors(gc, 0, nil)
+    log.PanicIf(err)
+
+    for _, scanPath := range paths {
+        err := gc.ReadFromPath(scanPath)
+        log.PanicIf(err)
+    }
+
+    return gc.VisitedCount(), nil
+}
+
+func CountDataFiles(paths []string) (count int, err error) {
+    defer func() {
+        if state := recover(); state != nil {
+            err = log.Wrap(state.(error))
+        }
+    }()
+
+    gc := geoindex.NewGeographicCollector(nil, nil)
+
+    err = geoindex.RegisterDataFileProcessors(gc)
+    log.PanicIf(err)
+
+    for _, scanPath := range paths {
+        err := gc.ReadFromPath(scanPath)
+        log.PanicIf(err)
+    }
+
+    return gc.VisitedCount(), nil
 }
 
 // GetCondensedDatetime returns a timestamp string in whatever timezone the
@@ -378,5 +506,4 @@ func LoadLocationListFile(ci *geoattractorindex.CityIndex, filepath string, r io
 
 func init() {
     gob.Register(map[string]interface{}{})
-    gob.Register(geoindex.GeographicRecord{})
 }

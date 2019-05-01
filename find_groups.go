@@ -119,6 +119,14 @@ func NewFindGroups(locationTs timeindex.TimeSlice, imageTs timeindex.TimeSlice, 
     return fg
 }
 
+func (fg *FindGroups) CurrentIndex() (position int) {
+    return fg.currentImagePosition
+}
+
+func (fg *FindGroups) Count() (position int) {
+    return len(fg.imageTs)
+}
+
 func (fg *FindGroups) SetLocationMatchStrategy(strategy string) {
     if strategy == LocationMatchStrategySparseData {
         fg.locationMatcherFn = fg.findLocationByTimeWithSparseLocations

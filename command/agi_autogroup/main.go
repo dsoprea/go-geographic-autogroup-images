@@ -62,9 +62,10 @@ func (tallies Tallies) Swap(i, j int) {
 // attractorParameters are the parameters common to anything that needs to load
 // a `geoattractorindex.CityIndex`.
 type attractorParameters struct {
-    CountriesFilepath    string `long:"countries-filepath" description:"File-path of the GeoNames countries data (usually called 'countryInfo.txt'). Not necessary if you already have a database."`
-    CitiesFilepath       string `long:"cities-filepath" description:"File-path of the GeoNames world-cities data (usually called 'allCountries.txt'). Not necessary if you already have a database."`
-    CityDatabaseFilepath string `long:"city-db-filepath" description:"File-path of city database. Will be created if does not exist." required:"true"`
+    CountriesFilepath    string   `long:"countries-filepath" description:"File-path of the GeoNames countries data (usually called 'countryInfo.txt'). Not necessary if you already have a database."`
+    CitiesFilepath       string   `long:"cities-filepath" description:"File-path of the GeoNames world-cities data (usually called 'allCountries.txt'). Not necessary if you already have a database."`
+    CityDatabaseFilepath string   `long:"city-db-filepath" description:"File-path of city database. Will be created if does not exist." required:"true"`
+    CountryFilter        []string `long:"country-filter" description:"Limit recognized cities to this country. Can be provided zero or more times."`
 }
 
 // indexParameters are the parameters common to anything that needs to load a
@@ -96,7 +97,7 @@ type groupParameters struct {
     NoPrintProgressOutput      bool     `long:"no-dots" description:"Don't print dot progress output if copying"`
     NoHashChecksOnExisting     bool     `long:"no-hash-checks" description:"If the file already exists in copy-path skip without calculating hash"`
     ImageTimestampSkewRaw      string   `long:"image-timestamp-skew" description:"A duration to be combined with the given polarity and added to the timestamps of the images to shift them to the local timezone. By default, all images are interpreted as UTC (a requirement of EXIF). Example: 5h"`
-    ImageTimestampSkewPolarity bool     `long:"image-timestamp-skew-polarity" description:"If skew is being used, true if it should be negative and false if positive"`
+    ImageTimestampSkewPolarity bool     `long:"image-timestamp-skew-polarity" description:"If skew is being used. false if it should be negative and true if positive"`
     TraceImages                []string `long:"trace-image" description:"Zero or more absolute file-paths of images to record additional processing comments for"`
     CameraModels               []string `long:"camera-model" description:"Zero or more camera-models to specifically include to the exclusion of all others"`
 
@@ -114,15 +115,31 @@ var (
 func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups, ci *geoattractorindex.CityIndex) {
     defer func() {
         if state := recover(); state != nil {
+            if ci != nil {
+                ci.Close()
+            }
+
             err := log.Wrap(state.(error))
             log.Panic(err)
         }
     }()
 
-    ci, err := geoautogroup.GetCityIndex(groupArguments.attractorParameters.CityDatabaseFilepath, groupArguments.attractorParameters.CountriesFilepath, groupArguments.attractorParameters.CitiesFilepath)
+    attractorParameters := groupArguments.attractorParameters
+
+    beVerbose := groupArguments.NoPrintProgressOutput == false
+
+    var err error
+    ci, err = geoautogroup.GetCityIndex(
+        attractorParameters.CityDatabaseFilepath,
+        attractorParameters.CountriesFilepath,
+        attractorParameters.CitiesFilepath,
+        attractorParameters.CountryFilter,
+        beVerbose,
+    )
+
     log.PanicIf(err)
 
-    locationIndex, _, _, err := geoautogroup.GetLocationTimeIndex(groupArguments.indexParameters.DataPaths, groupArguments.indexParameters.LocationsDatabaseFilepath)
+    locationIndex, _, _, err := geoautogroup.GetLocationTimeIndex(groupArguments.indexParameters.DataPaths, groupArguments.indexParameters.LocationsDatabaseFilepath, beVerbose)
     log.PanicIf(err)
 
     locationTs := locationIndex.Series()
@@ -153,7 +170,7 @@ func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups,
         imageTimestampSkew, _, err = timeparse.ParseDuration(groupArguments.ImageTimestampSkewRaw)
         log.PanicIf(err)
 
-        if groupArguments.ImageTimestampSkewPolarity == true {
+        if groupArguments.ImageTimestampSkewPolarity == false {
             imageTimestampSkew *= -1
         }
     }
@@ -163,7 +180,7 @@ func getFindGroups(groupArguments groupParameters) (fg *geoautogroup.FindGroups,
         cameraModels = groupArguments.CameraModels
     }
 
-    imageIndex, err := geoautogroup.GetImageTimeIndex(groupArguments.indexParameters.ImagePaths, imageTimestampSkew, cameraModels)
+    imageIndex, err := geoautogroup.GetImageTimeIndex(groupArguments.indexParameters.ImagePaths, imageTimestampSkew, cameraModels, beVerbose)
     log.PanicIf(err)
 
     imageTs := imageIndex.Series()
@@ -190,7 +207,8 @@ func handleGroup(groupArguments groupParameters) {
     defer func() {
         if state := recover(); state != nil {
             err := log.Wrap(state.(error))
-            log.Panic(err)
+            log.PrintError(err)
+            os.Exit(-1)
         }
     }()
 
@@ -211,6 +229,7 @@ func handleGroup(groupArguments groupParameters) {
     // Merge smaller cities with smaller datasets into the groups for larger
     // cities.
 
+    // TODO(dustin): !! Do we need a progress bar for this?
     collectedGroups, merged := gr.Reduce()
 
     if merged > 0 {
